@@ -1,4 +1,4 @@
-The Finite Nature of Music: A Mathematical Foundation
+<b>The Finite Nature of Music: A Mathematical Foundation</b>
 
 Ref:https://x.com/i/lists/1980224972359373294
 
