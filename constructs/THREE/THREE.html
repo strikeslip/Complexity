@@ -1,0 +1,729 @@
+<!--
+[SOS - Sounds Of Seismic] - FM Synthesis Generative Version
+https://sos.allshookup.org/
+Original Framework Copyright (c) [2025] [SHOOK aka D.V.R.]
+FM Synthesis Algorithm based on SOS-Granular-FM-Algorithmic-Composition-Design.md
+
+SOS is free software: you can redistribute it and/or modify
+it under the terms of the MIT License (https://opensource.org/license/mit)
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8">
+    <title>THREE - FM Seismic Synthesis</title>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #101015;
+            color: #e0e0e0;
+            text-align: center;
+            padding: 40px 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            font-size: 2.2em;
+            margin-bottom: 15px;
+            color: #ff6f00;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+        h2 {
+            font-size: 1.1em;
+            margin-bottom: 25px;
+            color: #999;
+            font-weight: 400;
+        }
+        button {
+            background: #ff6f00;
+            border: none;
+            color: #101015;
+            font-size: 18px;
+            font-weight: 600;
+            padding: 12px 28px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin: 10px 10px;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+        }
+        button:hover {
+            background: #ff8f33;
+        }
+        button:active {
+            transform: scale(0.98);
+        }
+        button:disabled {
+            background: #555;
+            color: #888;
+            cursor: not-allowed;
+        }
+        .info {
+            margin-top: 30px;
+            font-size: 0.95em;
+            color: #ccc;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .info strong {
+            color: #ffaa00;
+        }
+        .info a {
+            color: #66aaff;
+            text-decoration: none;
+        }
+        .info a:hover {
+            text-decoration: underline;
+        }
+        .error {
+            color: #ff5555;
+            font-weight: bold;
+            margin-top: 20px;
+        }
+        .loading {
+            margin-top: 20px;
+            font-style: italic;
+            color: #888;
+        }
+        .status-line {
+            display: block;
+            margin-bottom: 3px;
+        }
+        .cycle-info {
+            margin-top: 15px;
+            padding: 10px;
+            background: #1a1a20;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 0.85em;
+        }
+        .cycle-info .param {
+            color: #ff6f00;
+        }
+    </style>
+</head>
+<body>
+    <h1>THREE</h1>
+    <h2>FM Seismic Synthesis • 31s Algorithmic Cycles</h2>
+    <button id="startButton">Start</button>
+    <button id="stopButton" disabled>Stop</button>
+    <div id="statusInfo">Press Start to fetch seismic data and begin FM synthesis...</div>
+    <div id="cycleInfo" class="cycle-info" style="display:none;"></div>
+
+    <script>
+        // --- Configuration ---
+        const SEISMIC_DATA_DURATION_S = 60;
+        const SAMPLE_RATE = 44100;
+        const MIN_MAGNITUDE = 6.0;
+        const FETCH_TIMESPAN_DAYS = 30;
+        const STATION_INFO = { net: "IU", sta: "ANMO", loc: "00", cha: "BHZ" };
+        const CYCLE_DURATION_S = 31; // New composition every 31 seconds
+
+        // --- FM Synthesis Presets (each cycle picks different params) ---
+        const FM_PRESETS = {
+            carrierFreqs: [55, 82.5, 110, 147, 165, 220, 330, 440],
+            modIndices: [2, 5, 10, 15, 20, 30, 50, 80],
+            harmonicRatios: [
+                [1, 2, 3, 4],
+                [1, 1.5, 2, 3],
+                [1, 2, 4, 6],
+                [1, 2.5, 3.5, 5],
+                [1, 1.414, 2, 2.828],
+                [1, 3, 5, 7],
+                [1, 2, 3, 5],
+                [1, 1.618, 2.618, 4.236]
+            ],
+            waveforms: ['sine', 'triangle', 'sawtooth', 'square'],
+            attackTimes: [0.01, 0.05, 0.1, 0.2, 0.5, 1.0],
+            releaseTimes: [0.5, 1.0, 2.0, 3.0, 5.0, 8.0],
+            filterFreqs: [200, 400, 800, 1200, 2000, 4000, 8000],
+            filterQs: [0.5, 1, 2, 4, 8, 12],
+            lfoRates: [0.05, 0.1, 0.2, 0.5, 1, 2, 4],
+            lfoDepths: [0.01, 0.02, 0.05, 0.1, 0.2]
+        };
+
+        // --- Global State ---
+        let audioCtx = null;
+        let masterGain;
+        let reverb, reverbWetGain;
+        let delay, delayFeedbackGain, delayWetGain;
+        let seismicData = [];
+        let seismicAudioBuffer = null;
+        let isPlaying = false;
+        let currentQuakeInfo = null;
+        let cycleCount = 0;
+        let currentParams = {};
+        
+        let activeAudioNodes = [];
+        let activeSchedulers = [];
+        let fmEngine = null;
+
+        // DOM Elements
+        const startBtn = document.getElementById("startButton");
+        const stopBtn = document.getElementById("stopButton");
+        const statusInfo = document.getElementById("statusInfo");
+        const cycleInfo = document.getElementById("cycleInfo");
+
+        // --- Helper Functions ---
+        const mtof = (midi) => 440 * Math.pow(2, (midi - 69) / 12);
+        const getRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
+        const getRandomRange = (min, max) => min + Math.random() * (max - min);
+        
+        function formatQuakeTime(dateString) {
+            const d = new Date(dateString);
+            if (isNaN(d)) return "Invalid Date";
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            let hours = d.getHours();
+            const minutes = String(d.getMinutes()).padStart(2, '0');
+            const seconds = String(d.getSeconds()).padStart(2, '0');
+            const ampm = hours >= 12 ? 'pm' : 'am';
+            hours = hours % 12;
+            hours = hours ? hours : 12;
+            return `${month}/${day}/${year}, ${hours}:${minutes}:${seconds} ${ampm}`;
+        }
+
+        // --- Audio Utilities ---
+        function parseMiniSEED(buffer) {
+            try {
+                const view = new DataView(buffer);
+                if (buffer.byteLength < 64) throw new Error("Buffer too small for MiniSEED header.");
+                const numSamples = view.getInt16(46, false);
+                const dataOffset = 64;
+                if (numSamples <= 0 || buffer.byteLength < dataOffset + numSamples * 4) throw new Error(`Invalid sample count (${numSamples}) or buffer size.`);
+                const rawData = new Int32Array(buffer.slice(dataOffset, dataOffset + numSamples * 4));
+                const maxVal = rawData.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
+                if (maxVal === 0) return new Float32Array(rawData.length);
+                const factor = 1.0 / maxVal;
+                const normalized = new Float32Array(rawData.length);
+                for (let i = 0; i < rawData.length; i++) normalized[i] = rawData[i] * factor;
+                return normalized;
+            } catch (error) {
+                console.error("MiniSEED Parsing Error:", error);
+                updateStatus(`Error parsing seismic data: ${error.message}. Using synthetic data.`, true);
+                // Generate synthetic seismic-like data
+                const fallbackData = new Float32Array(4096);
+                for (let i = 0; i < fallbackData.length; i++) {
+                    fallbackData[i] = (Math.random() * 2 - 1) * Math.exp(-i / 2000);
+                }
+                return fallbackData;
+            }
+        }
+
+        function createAudioBufferFromFloat32Array(float32Array) {
+            if (!audioCtx || !float32Array || float32Array.length === 0) return null;
+            try {
+                const buffer = audioCtx.createBuffer(1, float32Array.length, audioCtx.sampleRate);
+                buffer.copyToChannel(float32Array, 0);
+                return buffer;
+            } catch (error) {
+                console.error("Error creating AudioBuffer:", error);
+                return null;
+            }
+        }
+
+        async function createReverb() {
+            const impulseLength = 3.0 * audioCtx.sampleRate;
+            const impulseBuffer = audioCtx.createBuffer(2, impulseLength, audioCtx.sampleRate);
+            for (let channel = 0; channel < 2; channel++) {
+                const data = impulseBuffer.getChannelData(channel);
+                for (let i = 0; i < impulseLength; i++) {
+                    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / impulseLength, 2.5);
+                }
+            }
+            reverb = audioCtx.createConvolver();
+            reverb.buffer = impulseBuffer;
+            reverbWetGain = audioCtx.createGain();
+            reverbWetGain.gain.value = 0.35;
+            reverb.connect(reverbWetGain).connect(masterGain);
+            activeAudioNodes.push(reverb, reverbWetGain);
+        }
+
+        function createDelay() {
+            delay = audioCtx.createDelay(2.0);
+            delay.delayTime.value = 0.4;
+            delayFeedbackGain = audioCtx.createGain();
+            delayFeedbackGain.gain.value = 0.45;
+            delayWetGain = audioCtx.createGain();
+            delayWetGain.gain.value = 0.3;
+            delay.connect(delayFeedbackGain).connect(delay);
+            delay.connect(delayWetGain).connect(masterGain);
+            activeAudioNodes.push(delay, delayFeedbackGain, delayWetGain);
+        }
+
+        // --- Data Fetching ---
+        async function fetchLatestEvent() {
+            const end = new Date().toISOString();
+            const start = new Date(Date.now() - FETCH_TIMESPAN_DAYS * 24 * 60 * 60 * 1000).toISOString();
+            const url = `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=${start}&endtime=${end}&minmagnitude=${MIN_MAGNITUDE}&orderby=time`;
+            try {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`USGS Event Fetch failed: ${res.status}`);
+                const data = await res.json();
+                if (!data.features || data.features.length == 0) throw new Error(`No events found with M >= ${MIN_MAGNITUDE}`);
+                return data.features[0];
+            } catch (error) {
+                console.error("Error fetching latest event:", error);
+                updateStatus(`Error fetching earthquake data: ${error.message}`, true);
+                return null;
+            }
+        }
+
+        async function fetchMiniSEED(eventTime) {
+            const startTimeISO = new Date(new Date(eventTime).getTime() - 5000).toISOString();
+            const endTimeISO = new Date(new Date(startTimeISO).getTime() + SEISMIC_DATA_DURATION_S * 1000).toISOString();
+            const { net, sta, loc, cha } = STATION_INFO;
+            const url = `https://service.iris.edu/fdsnws/dataselect/1/query?net=${net}&sta=${sta}&loc=${loc}&cha=${cha}&starttime=${startTimeISO}&endtime=${endTimeISO}&format=miniseed`;
+            console.log("Fetching MiniSEED from:", url);
+            try {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`IRIS MiniSEED Fetch failed: ${res.status}`);
+                if (res.status === 204) throw new Error(`No data returned from IRIS for station ${sta}.`);
+                return await res.arrayBuffer();
+            } catch (error) {
+                console.error("Error fetching MiniSEED:", error);
+                updateStatus(`Error fetching seismic waveform: ${error.message}`, true);
+                return null;
+            }
+        }
+
+        // --- FM SYNTHESIS ENGINE ---
+        class FMSeismicEngine {
+            constructor(audioContext, destination) {
+                this.ctx = audioContext;
+                this.destination = destination;
+                this.carriers = [];
+                this.modulators = [];
+                this.lfos = [];
+                this.seismicData = [];
+                this.playhead = 0;
+                this.isActive = false;
+                this.params = {};
+                
+                // Master output with filter
+                this.filter = this.ctx.createBiquadFilter();
+                this.filter.type = 'lowpass';
+                this.masterGain = this.ctx.createGain();
+                this.masterGain.gain.value = 0;
+                
+                this.filter.connect(this.masterGain);
+                this.masterGain.connect(this.destination);
+            }
+
+            loadSeismicData(float32Array) {
+                this.seismicData = Array.from(float32Array);
+            }
+
+            generateNewParams(cycleNum, magnitude, depth) {
+                // Use cycle number and seismic data to seed randomness
+                const seed = cycleNum * 31 + Math.floor(magnitude * 10);
+                const pseudoRandom = (n) => {
+                    const x = Math.sin(seed + n * 9999) * 10000;
+                    return x - Math.floor(x);
+                };
+
+                // Generate unique parameters for this cycle
+                const params = {
+                    cycleNum: cycleNum,
+                    carrierFreq: FM_PRESETS.carrierFreqs[Math.floor(pseudoRandom(1) * FM_PRESETS.carrierFreqs.length)],
+                    modIndex: FM_PRESETS.modIndices[Math.floor(pseudoRandom(2) * FM_PRESETS.modIndices.length)],
+                    harmonics: FM_PRESETS.harmonicRatios[Math.floor(pseudoRandom(3) * FM_PRESETS.harmonicRatios.length)],
+                    carrierWave: FM_PRESETS.waveforms[Math.floor(pseudoRandom(4) * FM_PRESETS.waveforms.length)],
+                    modWave: FM_PRESETS.waveforms[Math.floor(pseudoRandom(5) * FM_PRESETS.waveforms.length)],
+                    attackTime: FM_PRESETS.attackTimes[Math.floor(pseudoRandom(6) * FM_PRESETS.attackTimes.length)],
+                    releaseTime: FM_PRESETS.releaseTimes[Math.floor(pseudoRandom(7) * FM_PRESETS.releaseTimes.length)],
+                    filterFreq: FM_PRESETS.filterFreqs[Math.floor(pseudoRandom(8) * FM_PRESETS.filterFreqs.length)],
+                    filterQ: FM_PRESETS.filterQs[Math.floor(pseudoRandom(9) * FM_PRESETS.filterQs.length)],
+                    lfoRate: FM_PRESETS.lfoRates[Math.floor(pseudoRandom(10) * FM_PRESETS.lfoRates.length)],
+                    lfoDepth: FM_PRESETS.lfoDepths[Math.floor(pseudoRandom(11) * FM_PRESETS.lfoDepths.length)],
+                    // Seismic-influenced params
+                    modIndexScale: 1 + (magnitude - 6) * 0.5,
+                    filterMod: Math.min(1, depth / 500),
+                    detuneSpread: 5 + pseudoRandom(12) * 15,
+                    panSpread: 0.3 + pseudoRandom(13) * 0.7
+                };
+
+                this.params = params;
+                return params;
+            }
+
+            start(params) {
+                this.cleanup();
+                this.params = params;
+                this.isActive = true;
+                this.playhead = Math.floor(Math.random() * this.seismicData.length);
+
+                const now = this.ctx.currentTime;
+                const numCarriers = params.harmonics.length;
+
+                // Set filter
+                this.filter.frequency.setValueAtTime(params.filterFreq, now);
+                this.filter.Q.setValueAtTime(params.filterQ, now);
+
+                // Create carrier/modulator pairs for each harmonic
+                for (let i = 0; i < numCarriers; i++) {
+                    const ratio = params.harmonics[i];
+                    const freq = params.carrierFreq * ratio;
+                    
+                    // Carrier oscillator
+                    const carrier = this.ctx.createOscillator();
+                    carrier.type = params.carrierWave;
+                    carrier.frequency.value = freq;
+                    carrier.detune.value = (Math.random() - 0.5) * params.detuneSpread;
+                    
+                    // Modulator oscillator
+                    const modulator = this.ctx.createOscillator();
+                    modulator.type = params.modWave;
+                    modulator.frequency.value = freq * (1 + Math.random() * 0.5);
+                    
+                    // Modulation gain (controls mod index)
+                    const modGain = this.ctx.createGain();
+                    modGain.gain.value = freq * params.modIndex * params.modIndexScale / (i + 1);
+                    
+                    // Carrier gain (for envelope and level)
+                    const carrierGain = this.ctx.createGain();
+                    carrierGain.gain.value = 0;
+                    
+                    // Panning
+                    const panner = this.ctx.createStereoPanner();
+                    panner.pan.value = (Math.random() * 2 - 1) * params.panSpread;
+                    
+                    // LFO for carrier frequency modulation
+                    const lfo = this.ctx.createOscillator();
+                    lfo.type = 'sine';
+                    lfo.frequency.value = params.lfoRate * (0.8 + Math.random() * 0.4);
+                    const lfoGain = this.ctx.createGain();
+                    lfoGain.gain.value = freq * params.lfoDepth;
+                    
+                    // Connect FM routing
+                    modulator.connect(modGain);
+                    modGain.connect(carrier.frequency);
+                    lfo.connect(lfoGain);
+                    lfoGain.connect(carrier.frequency);
+                    carrier.connect(carrierGain);
+                    carrierGain.connect(panner);
+                    panner.connect(this.filter);
+                    
+                    // Fade in
+                    carrierGain.gain.setValueAtTime(0, now);
+                    carrierGain.gain.linearRampToValueAtTime(0.15 / numCarriers, now + params.attackTime);
+                    
+                    // Start oscillators
+                    carrier.start(now);
+                    modulator.start(now);
+                    lfo.start(now);
+                    
+                    this.carriers.push({ osc: carrier, gain: carrierGain, panner: panner });
+                    this.modulators.push({ osc: modulator, gain: modGain });
+                    this.lfos.push({ osc: lfo, gain: lfoGain });
+                }
+
+                // Fade in master
+                this.masterGain.gain.setValueAtTime(0, now);
+                this.masterGain.gain.linearRampToValueAtTime(0.7, now + params.attackTime * 2);
+
+                // Start seismic modulation loop
+                this.modulateFromSeismic();
+            }
+
+            modulateFromSeismic() {
+                if (!this.isActive || this.seismicData.length === 0) return;
+
+                const sample = this.seismicData[this.playhead];
+                const now = this.ctx.currentTime;
+                
+                // Modulate various parameters based on seismic sample
+                const modFactor = 1 + sample * 0.3;
+                const filterMod = this.params.filterFreq * (1 + sample * this.params.filterMod * 2);
+                
+                // Apply to filter
+                this.filter.frequency.setTargetAtTime(
+                    Math.max(100, Math.min(filterMod, 10000)),
+                    now, 0.05
+                );
+
+                // Apply to modulation indices
+                this.modulators.forEach((mod, i) => {
+                    const baseFreq = this.params.carrierFreq * this.params.harmonics[i % this.params.harmonics.length];
+                    const newModGain = baseFreq * this.params.modIndex * Math.abs(sample + 0.5) * this.params.modIndexScale;
+                    mod.gain.gain.setTargetAtTime(newModGain, now, 0.02);
+                });
+
+                // Apply slight pitch bend to carriers
+                this.carriers.forEach((car, i) => {
+                    car.osc.detune.setTargetAtTime(
+                        (sample * 20) + (Math.random() - 0.5) * this.params.detuneSpread,
+                        now, 0.05
+                    );
+                });
+
+                // Advance playhead
+                this.playhead = (this.playhead + 1) % this.seismicData.length;
+
+                // Schedule next update
+                if (this.isActive) {
+                    requestAnimationFrame(() => this.modulateFromSeismic());
+                }
+            }
+
+            fadeOut(duration = 2) {
+                const now = this.ctx.currentTime;
+                this.masterGain.gain.setTargetAtTime(0, now, duration / 3);
+                
+                this.carriers.forEach(car => {
+                    car.gain.gain.setTargetAtTime(0, now, duration / 3);
+                });
+            }
+
+            cleanup() {
+                this.isActive = false;
+                const now = this.ctx.currentTime;
+                
+                this.carriers.forEach(car => {
+                    try {
+                        car.osc.stop(now + 0.1);
+                        car.osc.disconnect();
+                        car.gain.disconnect();
+                        car.panner.disconnect();
+                    } catch(e) {}
+                });
+                
+                this.modulators.forEach(mod => {
+                    try {
+                        mod.osc.stop(now + 0.1);
+                        mod.osc.disconnect();
+                        mod.gain.disconnect();
+                    } catch(e) {}
+                });
+                
+                this.lfos.forEach(lfo => {
+                    try {
+                        lfo.osc.stop(now + 0.1);
+                        lfo.osc.disconnect();
+                        lfo.gain.disconnect();
+                    } catch(e) {}
+                });
+                
+                this.carriers = [];
+                this.modulators = [];
+                this.lfos = [];
+            }
+        }
+
+        // --- Sub-bass drone layer ---
+        function createSubBass(rootFreq) {
+            const now = audioCtx.currentTime;
+            
+            const osc = audioCtx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = rootFreq / 4; // Two octaves below
+            
+            const lfo = audioCtx.createOscillator();
+            lfo.type = 'sine';
+            lfo.frequency.value = 0.03 + Math.random() * 0.02;
+            
+            const lfoGain = audioCtx.createGain();
+            lfoGain.gain.value = rootFreq / 4 * 0.02;
+            
+            const gain = audioCtx.createGain();
+            gain.gain.value = 0;
+            
+            lfo.connect(lfoGain);
+            lfoGain.connect(osc.frequency);
+            osc.connect(gain);
+            gain.connect(masterGain);
+            
+            osc.start(now);
+            lfo.start(now);
+            
+            gain.gain.setTargetAtTime(0.15, now, 2);
+            
+            activeAudioNodes.push(osc, lfo, lfoGain, gain);
+            
+            return { osc, gain, lfo };
+        }
+
+        // --- Cycle Management ---
+        function startNewCycle() {
+            if (!isPlaying) return;
+            
+            cycleCount++;
+            console.log(`Starting cycle ${cycleCount}`);
+            
+            // Generate new FM parameters
+            const params = fmEngine.generateNewParams(
+                cycleCount,
+                currentQuakeInfo.mag,
+                currentQuakeInfo.depth
+            );
+            
+            // Crossfade: fade out current, start new
+            if (cycleCount > 1) {
+                fmEngine.fadeOut(1.5);
+                setTimeout(() => {
+                    fmEngine.start(params);
+                }, 1500);
+            } else {
+                fmEngine.start(params);
+            }
+            
+            // Update cycle display
+            updateCycleDisplay(params);
+        }
+
+        function updateCycleDisplay(params) {
+            cycleInfo.innerHTML = `
+                <div>Cycle <span class="param">#${params.cycleNum}</span></div>
+                <div>Carrier: <span class="param">${params.carrierFreq}Hz ${params.carrierWave}</span> | 
+                     Mod Index: <span class="param">${params.modIndex}</span></div>
+                <div>Harmonics: <span class="param">[${params.harmonics.join(', ')}]</span></div>
+                <div>Filter: <span class="param">${params.filterFreq}Hz Q${params.filterQ}</span> | 
+                     LFO: <span class="param">${params.lfoRate}Hz</span></div>
+            `;
+        }
+
+        // --- Control Flow ---
+        function updateStatusDisplay() {
+            if (!isPlaying || !currentQuakeInfo) return;
+            const { mag, place, depth, time, usgsUrl } = currentQuakeInfo;
+            const statusHTML = `
+                <span class="status-line">Now Playing: <strong>M${mag.toFixed(1)}</strong> ${place}</span>
+                <span class="status-line">Depth: <strong>${depth.toFixed(1)} km</strong>, Time: ${formatQuakeTime(time)}</span>
+                <span class="status-line"><a href="${usgsUrl}" target="_blank">View on USGS</a> | Station: ${STATION_INFO.net}.${STATION_INFO.sta}</span>
+            `;
+            statusInfo.innerHTML = statusHTML;
+            statusInfo.className = 'info';
+        }
+
+        function updateStatus(message, isError = false, isLoading = false) {
+            statusInfo.innerHTML = `<span class="${isError ? 'error' : 'loading'}">${message}</span>`;
+            statusInfo.className = isError ? 'info error' : 'info loading';
+        }
+
+        async function startSonification() {
+            if (isPlaying) return;
+            startBtn.disabled = true;
+            cycleCount = 0;
+            updateStatus("Initializing Audio...", false, true);
+
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+                if (audioCtx.state === 'suspended') await audioCtx.resume();
+                if (audioCtx.state !== 'running') throw new Error(`AudioContext failed to start (${audioCtx.state}).`);
+
+                masterGain = audioCtx.createGain();
+                masterGain.gain.value = 0;
+                masterGain.connect(audioCtx.destination);
+                activeAudioNodes.push(masterGain);
+
+                await createReverb();
+                createDelay();
+
+                updateStatus("Fetching latest earthquake data...", false, true);
+                const event = await fetchLatestEvent();
+                if (!event) { stopSonification(); return; }
+
+                currentQuakeInfo = {
+                    place: event.properties.place || "Unknown location",
+                    mag: event.properties.mag || 0,
+                    depth: event.geometry.coordinates[2] || 0,
+                    time: new Date(event.properties.time).toISOString(),
+                    usgsUrl: `https://earthquake.usgs.gov/earthquakes/eventpage/${event.id}/executive`
+                };
+                updateStatus(`Found M${currentQuakeInfo.mag.toFixed(1)} event. Fetching waveform...`, false, true);
+
+                const miniSEEDBuffer = await fetchMiniSEED(currentQuakeInfo.time);
+                if (!miniSEEDBuffer) { stopSonification(); return; }
+                const rawSamples = parseMiniSEED(miniSEEDBuffer);
+                seismicAudioBuffer = createAudioBufferFromFloat32Array(rawSamples);
+                seismicData = rawSamples;
+                if (!seismicAudioBuffer) throw new Error("Parsed seismic data is empty or invalid.");
+
+                isPlaying = true;
+
+                // Configure effects based on earthquake
+                const depthFactor = Math.min(1, currentQuakeInfo.depth / 600);
+                if (reverbWetGain) reverbWetGain.gain.setTargetAtTime(0.25 + depthFactor * 0.4, audioCtx.currentTime, 0.5);
+                if (delay) delay.delayTime.setTargetAtTime(0.2 + depthFactor * 0.4, audioCtx.currentTime, 0.5);
+                if (delayFeedbackGain) delayFeedbackGain.gain.setTargetAtTime(0.35 + depthFactor * 0.25, audioCtx.currentTime, 0.5);
+
+                // Initialize FM Engine
+                fmEngine = new FMSeismicEngine(audioCtx, masterGain);
+                fmEngine.loadSeismicData(rawSamples);
+                
+                // Connect FM engine to effects
+                if (reverb) fmEngine.masterGain.connect(reverb);
+                if (delay) fmEngine.masterGain.connect(delay);
+
+                // Start sub-bass drone
+                const bassFreq = FM_PRESETS.carrierFreqs[Math.floor(currentQuakeInfo.mag - 5)] || 110;
+                createSubBass(bassFreq);
+
+                // Start first cycle
+                startNewCycle();
+
+                // Schedule new cycles every 31 seconds
+                const cycleInterval = setInterval(() => {
+                    if (isPlaying) {
+                        startNewCycle();
+                    }
+                }, CYCLE_DURATION_S * 1000);
+                activeSchedulers.push(cycleInterval);
+
+                // Fade in master
+                masterGain.gain.setTargetAtTime(0.6, audioCtx.currentTime, 3.0);
+                
+                stopBtn.disabled = false;
+                cycleInfo.style.display = 'block';
+                updateStatusDisplay();
+
+            } catch (error) {
+                console.error("Error during startup:", error);
+                updateStatus(`Startup Error: ${error.message}`, true);
+                stopSonification();
+            }
+        }
+
+        function stopSonification() {
+            if (!isPlaying && !audioCtx) return;
+            console.log("Stopping sonification...");
+            isPlaying = false;
+            
+            activeSchedulers.forEach(id => { clearInterval(id); clearTimeout(id); });
+            activeSchedulers = [];
+
+            if (fmEngine) {
+                fmEngine.cleanup();
+                fmEngine = null;
+            }
+
+            if (audioCtx) {
+                const now = audioCtx.currentTime;
+                if (masterGain) masterGain.gain.setTargetAtTime(0, now, 0.5);
+                
+                activeAudioNodes.forEach(node => { if (node.stop) node.stop(now + 0.6); });
+                
+                setTimeout(() => {
+                    activeAudioNodes.forEach(node => { try { node.disconnect(); } catch (e) {} });
+                    activeAudioNodes = [];
+                    if (audioCtx) audioCtx.close().then(() => console.log("AudioContext closed."));
+                    audioCtx = null;
+                }, 1000);
+            }
+            
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            cycleInfo.style.display = 'none';
+            updateStatus("Sonification stopped. Press Start to fetch new data.");
+            currentQuakeInfo = null;
+            cycleCount = 0;
+        }
+
+        startBtn.onclick = startSonification;
+        stopBtn.onclick = stopSonification;
+    </script>
+</body>
+</html>
