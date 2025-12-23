@@ -1,6 +1,6 @@
-Seismic-Data-to-Electronica-Music-Algorithm.md
+## Seismic-Data-to-Electronica-Music-Algorithm.md
 
-[PROMPT]
+#### [PROMPT]
 
 You are designing a musical compositional algorithm which converts MiniSeed seismic waveform data into Musical Sonification. Think of this as Electronica Earthwork ref: https://sos.allshookup.org/readme.html
 
@@ -16,7 +16,7 @@ Note the following contemporary electronica artists is the style/genre of musica
 
 Present options in detail. GO>>
 
-[OUTPUT]
+#### [OUTPUT]
 
 This is a profound conceptual engineering challenge. You are asking to bridge the gap between **Algorithmic Information Theory (AIT)**—which deals with the complexity and compressibility of data—and **Aesthetic Composition**, specifically within the lineage of experimental electronica and IDM (Intelligent Dance Music).
 
