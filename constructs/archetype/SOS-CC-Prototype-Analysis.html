@@ -1,0 +1,952 @@
+# SOS-CC-Prototype: Technical & Conceptual Analysis
+
+## Executive Summary
+
+**SOS-CC-Prototype** is a sophisticated seismic sonification system implementing attractor dynamics, Kolmogorov Complexity (KC)-informed complexity regulation, and look-ahead grain scheduling. The prototype transforms real-time earthquake waveform data from USGS/IRIS into generative electronica through a dynamical systems approach where a state point navigates a 2D phase space, modulating synthesis parameters based on proximity to four musical "attractors."
+
+---
+
+## I. ARCHITECTURE OVERVIEW
+
+### Core Systems
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        SOS-CC-Prototype Architecture                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌──────────────┐    ┌────────────────┐    ┌─────────────────────┐     │
+│   │ USGS GeoJSON │───▶│ IRIS MiniSEED  │───▶│ Seismic Data Buffer │     │
+│   │   M6.0+ API  │    │ Waveform Fetch │    │   (Float32Array)    │     │
+│   └──────────────┘    └────────────────┘    └──────────┬──────────┘     │
+│                                                         │               │
+│                                                         ▼               │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                   ATTRACTOR DYNAMICS ENGINE                     │   │
+│   │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐         │   │
+│   │  │  DRONE   │  │ TEXTURE  │  │  PULSE   │  │  SPARSE  │         │   │
+│   │  │ (0.2,0.2)│  │ (0.8,0.3)│  │ (0.7,0.8)│  │(0.25,0.75)│        │   │
+│   │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘         │   │
+│   │       └─────────────┴─────────────┴─────────────┘               │   │
+│   │                         │                                       │   │
+│   │                   State Point (x,y)                             │   │
+│   │                   + Velocity Vector                             │   │
+│   │                   + Trajectory History                          │   │
+│   └─────────────────────────┬───────────────────────────────────────┘   │
+│                             │                                           │
+│                             ▼                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │               SYNTHESIS PARAMETER BLENDING                      │   │
+│   │  • density (grains/sec)   • grainDuration   • frequencyMult     │   │
+│   │  • spread (pitch)         • filterQ         • scale/waveform    │   │
+│   └─────────────────────────┬───────────────────────────────────────┘   │
+│                             │                                           │
+│                             ▼                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                LOOK-AHEAD GRAIN SCHEDULER                       │   │
+│   │     scheduleAheadTime: 100ms │ schedulerInterval: 25ms          │   │
+│   └─────────────────────────┬───────────────────────────────────────┘   │
+│                             │                                           │
+│                             ▼                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                    AUDIO OUTPUT CHAIN                           │   │
+│   │  Oscillator ─▶ Filter ─▶ Envelope ─▶ Panner ─▶ Compressor       │   │
+│   │                                    ├─▶ Reverb (convolution)     │   │
+│   │                                    └─▶ Delay (w/ feedback)      │   │
+│   │                                                                 │   │
+│   │  Sub-bass Drone (sine + LFO) ──────────────────▶ Master Gain    │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## II. TECHNICAL COMPONENT BREAKDOWN
+
+### A. Data Acquisition Layer
+
+| Component | Endpoint | Purpose |
+|-----------|----------|---------|
+| **USGS Query** | `earthquake.usgs.gov/fdsnws/event/1/query` | Fetch M6.0+ events (30-day window) |
+| **IRIS Waveform** | `service.iris.edu/fdsnws/dataselect/1/query` | Retrieve MiniSEED from IU.ANMO.00.BHZ |
+| **MiniSEED Parser** | Custom `parseMiniSEED()` | Extract Int32 samples → normalize to Float32 |
+
+**Current Limitation:** The MiniSEED parser is basic—only handles single-record, 64-byte header format. Real MiniSEED often contains multiple records with Steim compression.
+
+### B. Attractor Dynamics Engine
+
+The system models a particle navigating a 2D phase space (x,y ∈ [0,1]) under competing influences:
+
+#### Attractor Configurations
+
+| Attractor | Position | Strength | Density | Grain Dur | Freq Mult | Spread | Scale |
+|-----------|----------|----------|---------|-----------|-----------|--------|-------|
+| **Drone** | (0.2, 0.2) | 0.8 | 8/sec | 400ms | 0.5× | 0.1 | Pentatonic |
+| **Texture** | (0.8, 0.3) | 0.6 | 45/sec | 60ms | 2.0× | 0.8 | Dorian |
+| **Pulse** | (0.7, 0.8) | 0.5 | 20/sec | 80ms | 1.0× | 0.3 | Harmonic Minor |
+| **Sparse** | (0.25, 0.75) | 0.7 | 4/sec | 800ms | 0.25× | 0.05 | Phrygian |
+
+#### Force Calculation
+
+```javascript
+// Inverse-square attraction modulated by seismic activity
+const influence = (strength * attractorWeakening) / (distance² + 0.1);
+
+// Seismic forcing adds stochastic directional bias
+forceX += derivative * 10 * random(-0.5, 0.5);
+forceY += amplitude * 5 * random(-0.5, 0.5);
+```
+
+**Key Insight:** High seismic amplitude *weakens* attractor pull (up to 70%), enabling more exploratory behavior during active seismic events.
+
+### C. KC-Informed Complexity Regulation
+
+The system approximates Kolmogorov Complexity through:
+
+1. **Shannon Entropy** — Distribution of grain frequencies across 16 bins
+2. **Interval Variance** — Temporal irregularity of grain events
+3. **Feedback Loop** — Adjusts density/spread to maintain target KC range (0.4–0.7)
+
+```javascript
+if (kcError > 0.1) {      // Too simple
+    blended.density *= 1.1;
+    blended.spread *= 1.2;
+} else if (kcError < -0.1) { // Too complex
+    blended.density *= 0.9;
+    blended.spread *= 0.8;
+}
+```
+
+### D. Grain Synthesis (Current Implementation)
+
+**Type:** Oscillator-based pseudo-granular (NOT true sample-based granular synthesis)
+
+Each "grain" is an oscillator with:
+- Hanning-ish envelope (linear attack 30%, release 50%)
+- Lowpass filter at 3× fundamental
+- Slight random detune (±7.5 cents)
+- Stereo panning (±0.8)
+- Reverb/delay sends
+
+**Critical Gap:** The `seismicBuffer` is created but *never used for playback*. The system synthesizes tones rather than manipulating actual seismic waveform grains.
+
+### E. Visualization (Phase Space)
+
+Current implementation:
+- Radial gradients marking attractor basins
+- Blue trajectory line (200 points)
+- Glowing state point
+- Seismic amplitude → border glow intensity
+
+---
+
+## III. ENHANCEMENT PROPOSALS
+
+### A. TRUE GRANULAR SYNTHESIS ENGINE
+
+The current oscillator approach misses the sonic character of actual seismic waveforms. Here's a complete implementation for true sample-based granular synthesis:
+
+```javascript
+// ═══════════════════════════════════════════════════════════════════════════
+// ENHANCED GRANULAR SYNTHESIS ENGINE
+// ═══════════════════════════════════════════════════════════════════════════
+
+class SeismicGranulator {
+    constructor(audioCtx, seismicBuffer, config = {}) {
+        this.ctx = audioCtx;
+        this.buffer = seismicBuffer;
+        
+        // Grain parameters with sensible defaults
+        this.config = {
+            grainSize: config.grainSize || 0.08,        // 80ms default
+            grainSizeVar: config.grainSizeVar || 0.3,   // ±30% variation
+            density: config.density || 20,              // grains/second
+            pitchShift: config.pitchShift || 1.0,       // playback rate
+            pitchVar: config.pitchVar || 0.1,           // ±10% variation
+            positionSpread: config.positionSpread || 0.2,
+            panSpread: config.panSpread || 0.8,
+            reverse: config.reverse || false,
+            windowType: config.windowType || 'hanning', // 'hanning', 'gaussian', 'tukey'
+            attackRatio: config.attackRatio || 0.35,    // for tukey window
+            ...config
+        };
+        
+        // Pre-computed window functions
+        this.windowCache = new Map();
+        
+        // Grain cloud state
+        this.activeGrains = new Set();
+        this.grainPool = [];
+        this.poolSize = 100;
+        
+        this.initGrainPool();
+    }
+    
+    initGrainPool() {
+        // Pre-allocate grain nodes for efficiency
+        for (let i = 0; i < this.poolSize; i++) {
+            this.grainPool.push({
+                source: null,
+                gain: this.ctx.createGain(),
+                panner: this.ctx.createStereoPanner(),
+                inUse: false
+            });
+        }
+    }
+    
+    getWindow(size, type = 'hanning') {
+        const key = `${size}-${type}`;
+        if (this.windowCache.has(key)) return this.windowCache.get(key);
+        
+        const window = new Float32Array(size);
+        
+        switch(type) {
+            case 'hanning':
+                for (let i = 0; i < size; i++) {
+                    window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (size - 1)));
+                }
+                break;
+                
+            case 'gaussian':
+                const sigma = 0.4;
+                for (let i = 0; i < size; i++) {
+                    const n = (i - (size - 1) / 2) / (sigma * (size - 1) / 2);
+                    window[i] = Math.exp(-0.5 * n * n);
+                }
+                break;
+                
+            case 'tukey':
+                const alpha = this.config.attackRatio * 2;
+                for (let i = 0; i < size; i++) {
+                    const x = i / (size - 1);
+                    if (x < alpha / 2) {
+                        window[i] = 0.5 * (1 + Math.cos(Math.PI * (2 * x / alpha - 1)));
+                    } else if (x > 1 - alpha / 2) {
+                        window[i] = 0.5 * (1 + Math.cos(Math.PI * (2 * x / alpha - 2 / alpha + 1)));
+                    } else {
+                        window[i] = 1;
+                    }
+                }
+                break;
+                
+            case 'expodec':
+                // Exponential decay - sharp attack, gradual release
+                for (let i = 0; i < size; i++) {
+                    const attack = Math.min(1, i / (size * 0.1));
+                    const decay = Math.exp(-3 * i / size);
+                    window[i] = attack * decay;
+                }
+                break;
+        }
+        
+        this.windowCache.set(key, window);
+        return window;
+    }
+    
+    scheduleGrain(time, params = {}) {
+        const cfg = { ...this.config, ...params };
+        
+        // Find available grain from pool
+        let grain = this.grainPool.find(g => !g.inUse);
+        if (!grain) return; // Pool exhausted
+        
+        grain.inUse = true;
+        this.activeGrains.add(grain);
+        
+        // Calculate grain parameters
+        const sizeVar = 1 + (Math.random() - 0.5) * 2 * cfg.grainSizeVar;
+        const grainDuration = cfg.grainSize * sizeVar;
+        const grainSamples = Math.floor(grainDuration * this.ctx.sampleRate);
+        
+        // Position in buffer with spread
+        const basePosition = cfg.position !== undefined 
+            ? cfg.position 
+            : (this.currentPosition || 0);
+        const posOffset = (Math.random() - 0.5) * cfg.positionSpread;
+        let startSample = Math.floor((basePosition + posOffset) * this.buffer.length);
+        startSample = Math.max(0, Math.min(this.buffer.length - grainSamples, startSample));
+        
+        // Create grain buffer with window applied
+        const grainBuffer = this.ctx.createBuffer(
+            this.buffer.numberOfChannels,
+            grainSamples,
+            this.ctx.sampleRate
+        );
+        
+        const window = this.getWindow(grainSamples, cfg.windowType);
+        
+        for (let ch = 0; ch < this.buffer.numberOfChannels; ch++) {
+            const sourceData = this.buffer.getChannelData(ch);
+            const grainData = grainBuffer.getChannelData(ch);
+            
+            for (let i = 0; i < grainSamples; i++) {
+                const readIndex = cfg.reverse 
+                    ? startSample + grainSamples - 1 - i 
+                    : startSample + i;
+                const sample = sourceData[readIndex] || 0;
+                grainData[i] = sample * window[i];
+            }
+        }
+        
+        // Create and configure source
+        grain.source = this.ctx.createBufferSource();
+        grain.source.buffer = grainBuffer;
+        
+        // Pitch with variation
+        const pitchVar = 1 + (Math.random() - 0.5) * 2 * cfg.pitchVar;
+        grain.source.playbackRate.setValueAtTime(cfg.pitchShift * pitchVar, time);
+        
+        // Amplitude
+        const amplitude = cfg.amplitude || 0.3;
+        grain.gain.gain.setValueAtTime(amplitude * (0.7 + Math.random() * 0.3), time);
+        
+        // Pan
+        const pan = (Math.random() - 0.5) * 2 * cfg.panSpread;
+        grain.panner.pan.setValueAtTime(pan, time);
+        
+        // Connect
+        grain.source.connect(grain.gain);
+        grain.gain.connect(grain.panner);
+        grain.panner.connect(cfg.destination || this.ctx.destination);
+        
+        // Optional effects sends
+        if (cfg.reverbSend) {
+            const reverbGain = this.ctx.createGain();
+            reverbGain.gain.value = cfg.reverbAmount || 0.3;
+            grain.gain.connect(reverbGain);
+            reverbGain.connect(cfg.reverbSend);
+        }
+        
+        // Schedule
+        const actualDuration = grainDuration / (cfg.pitchShift * pitchVar);
+        grain.source.start(time);
+        grain.source.stop(time + actualDuration + 0.01);
+        
+        // Cleanup
+        grain.source.onended = () => {
+            grain.inUse = false;
+            this.activeGrains.delete(grain);
+            try { grain.source.disconnect(); } catch(e) {}
+        };
+    }
+    
+    // Schedule multiple grains using look-ahead
+    scheduleGrainCloud(startTime, duration, params = {}) {
+        const cfg = { ...this.config, ...params };
+        const interval = 1 / cfg.density;
+        let time = startTime;
+        
+        while (time < startTime + duration) {
+            const jitter = interval * 0.3 * (Math.random() - 0.5);
+            this.scheduleGrain(time, cfg);
+            time += interval + jitter;
+        }
+    }
+    
+    setPosition(position) {
+        this.currentPosition = Math.max(0, Math.min(1, position));
+    }
+    
+    updateConfig(newConfig) {
+        Object.assign(this.config, newConfig);
+    }
+}
+```
+
+#### Integration with Attractor System
+
+```javascript
+// In updateSynthesisParams():
+if (granulator) {
+    granulator.updateConfig({
+        grainSize: blended.grainDuration,
+        density: blended.density,
+        pitchShift: blended.frequencyMult,
+        pitchVar: blended.spread * 0.5,
+        positionSpread: blended.spread * 0.3,
+        windowType: getWindowForAttractor(currentAttractor)
+    });
+    granulator.setPosition(seismicPlayhead);
+}
+
+function getWindowForAttractor(attractor) {
+    const windowMap = {
+        'Drone': 'gaussian',      // Smooth, overlapping
+        'Texture': 'hanning',     // Balanced
+        'Pulse': 'tukey',         // Punchy attack
+        'Sparse': 'expodec'       // Percussive decay
+    };
+    return windowMap[attractor?.name] || 'hanning';
+}
+```
+
+### B. SEISMIC SHADOW ZONE VISUALIZATION
+
+The seismic shadow zone (103°–142° from epicenter) is one of Earth's most dramatic geological features, caused by the liquid outer core refracting and blocking P-waves. Here's a complete visualization system:
+
+```javascript
+// ═══════════════════════════════════════════════════════════════════════════
+// SEISMIC SHADOW ZONE VISUALIZATION ENGINE
+// ═══════════════════════════════════════════════════════════════════════════
+
+class ShadowZoneVisualizer {
+    constructor(canvas, config = {}) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        
+        this.config = {
+            // Earth model
+            earthRadius: Math.min(canvas.width, canvas.height) * 0.35,
+            coreRatio: 0.545,      // Outer core radius / Earth radius
+            innerCoreRatio: 0.19,  // Inner core radius / Earth radius
+            
+            // Shadow zone angles (degrees from epicenter)
+            shadowStart: 103,
+            shadowEnd: 142,
+            
+            // Colors
+            mantleColor: '#1a2a3a',
+            outerCoreColor: '#4a2a1a',
+            innerCoreColor: '#6a4a2a',
+            crustColor: '#2d4a5a',
+            shadowColor: 'rgba(0, 0, 0, 0.6)',
+            pWaveColor: '#4a9eff',
+            sWaveColor: '#ff6a4a',
+            surfaceWaveColor: '#4aff9e',
+            
+            // Animation
+            waveSpeed: 0.02,
+            rayCount: 24,
+            
+            ...config
+        };
+        
+        this.epicenterAngle = -Math.PI / 2; // Top of Earth
+        this.animationPhase = 0;
+        this.seismicAmplitude = 0;
+        this.rays = [];
+        this.initRays();
+    }
+    
+    initRays() {
+        // Pre-calculate ray paths through Earth
+        this.rays = [];
+        const deltaAngle = Math.PI / (this.config.rayCount - 1);
+        
+        for (let i = 0; i < this.config.rayCount; i++) {
+            const takeoffAngle = -Math.PI / 2 + i * deltaAngle;
+            const ray = this.calculateRayPath(takeoffAngle);
+            this.rays.push(ray);
+        }
+    }
+    
+    calculateRayPath(takeoffAngle) {
+        // Simplified ray tracing through Earth's layers
+        // In reality, Snell's law would be applied at each boundary
+        
+        const R = this.config.earthRadius;
+        const coreR = R * this.config.coreRatio;
+        const innerR = R * this.config.innerCoreRatio;
+        
+        const points = [];
+        const cx = this.canvas.width / 2;
+        const cy = this.canvas.height / 2;
+        
+        // Start at epicenter
+        const startX = cx + R * Math.cos(this.epicenterAngle);
+        const startY = cy + R * Math.sin(this.epicenterAngle);
+        points.push({ x: startX, y: startY, layer: 'surface' });
+        
+        // Ray direction
+        const dirX = Math.cos(takeoffAngle);
+        const dirY = Math.sin(takeoffAngle);
+        
+        // Check intersections with core
+        const dx = startX - cx;
+        const dy = startY - cy;
+        
+        // Parametric ray-circle intersection
+        const a = dirX * dirX + dirY * dirY;
+        const b = 2 * (dx * dirX + dy * dirY);
+        
+        // Check outer core intersection
+        const cCore = dx * dx + dy * dy - coreR * coreR;
+        const discCore = b * b - 4 * a * cCore;
+        
+        let hitsCore = false;
+        let coreEntry = null;
+        let coreExit = null;
+        
+        if (discCore > 0) {
+            const t1 = (-b - Math.sqrt(discCore)) / (2 * a);
+            const t2 = (-b + Math.sqrt(discCore)) / (2 * a);
+            
+            if (t1 > 0 && t2 > 0) {
+                hitsCore = true;
+                coreEntry = {
+                    x: startX + dirX * t1,
+                    y: startY + dirY * t1,
+                    layer: 'core-entry'
+                };
+                coreExit = {
+                    x: startX + dirX * t2,
+                    y: startY + dirY * t2,
+                    layer: 'core-exit'
+                };
+            }
+        }
+        
+        if (hitsCore) {
+            // Ray enters core - gets refracted (simplified as straight path through core)
+            points.push(coreEntry);
+            points.push(coreExit);
+            
+            // Calculate exit point on far side of Earth
+            // Refraction causes the shadow zone
+            const exitAngle = Math.atan2(coreExit.y - cy, coreExit.x - cx);
+            const surfaceExit = {
+                x: cx + R * Math.cos(exitAngle + Math.PI * 0.2), // Refraction bends ray
+                y: cy + R * Math.sin(exitAngle + Math.PI * 0.2),
+                layer: 'surface',
+                refracted: true
+            };
+            points.push(surfaceExit);
+        } else {
+            // Ray travels through mantle only
+            // Find exit point on opposite side
+            const cSurface = dx * dx + dy * dy - R * R;
+            const discSurface = b * b - 4 * a * cSurface;
+            
+            if (discSurface > 0) {
+                const t = (-b + Math.sqrt(discSurface)) / (2 * a);
+                points.push({
+                    x: startX + dirX * t,
+                    y: startY + dirY * t,
+                    layer: 'surface'
+                });
+            }
+        }
+        
+        return {
+            points,
+            hitsCore,
+            takeoffAngle
+        };
+    }
+    
+    setEpicenter(lon, lat) {
+        // Convert geographic coordinates to canvas angle
+        this.epicenterAngle = -Math.PI / 2 + (lon / 180) * Math.PI;
+        this.initRays();
+    }
+    
+    setSeismicAmplitude(amplitude) {
+        this.seismicAmplitude = Math.max(0, Math.min(1, amplitude));
+    }
+    
+    draw(phase = 0) {
+        const ctx = this.ctx;
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        const cx = w / 2;
+        const cy = h / 2;
+        const R = this.config.earthRadius;
+        
+        // Clear
+        ctx.fillStyle = '#08080c';
+        ctx.fillRect(0, 0, w, h);
+        
+        // Draw Earth layers
+        this.drawEarthLayers(cx, cy, R);
+        
+        // Draw shadow zones
+        this.drawShadowZones(cx, cy, R);
+        
+        // Draw seismic rays
+        this.drawSeismicRays(cx, cy, R, phase);
+        
+        // Draw epicenter
+        this.drawEpicenter(cx, cy, R);
+        
+        // Draw station indicator
+        this.drawStation(cx, cy, R);
+        
+        // Update phase
+        this.animationPhase = phase;
+    }
+    
+    drawEarthLayers(cx, cy, R) {
+        const ctx = this.ctx;
+        
+        // Mantle
+        const mantleGradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+        mantleGradient.addColorStop(0, '#0a1520');
+        mantleGradient.addColorStop(0.55, this.config.mantleColor);
+        mantleGradient.addColorStop(1, this.config.crustColor);
+        
+        ctx.fillStyle = mantleGradient;
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Outer core
+        const coreR = R * this.config.coreRatio;
+        const coreGradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+        coreGradient.addColorStop(0, '#8a5a3a');
+        coreGradient.addColorStop(1, this.config.outerCoreColor);
+        
+        ctx.fillStyle = coreGradient;
+        ctx.beginPath();
+        ctx.arc(cx, cy, coreR, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Inner core
+        const innerR = R * this.config.innerCoreRatio;
+        ctx.fillStyle = this.config.innerCoreColor;
+        ctx.beginPath();
+        ctx.arc(cx, cy, innerR, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Core boundary glow
+        ctx.strokeStyle = 'rgba(255, 150, 100, 0.3)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, coreR, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+    
+    drawShadowZones(cx, cy, R) {
+        const ctx = this.ctx;
+        
+        // Convert shadow zone angles to radians
+        const shadowStart = this.config.shadowStart * Math.PI / 180;
+        const shadowEnd = this.config.shadowEnd * Math.PI / 180;
+        
+        // Draw both shadow zones (symmetric)
+        for (let side = 0; side < 2; side++) {
+            const startAngle = this.epicenterAngle + (side === 0 ? shadowStart : -shadowEnd);
+            const endAngle = this.epicenterAngle + (side === 0 ? shadowEnd : -shadowStart);
+            
+            // Shadow zone arc
+            ctx.fillStyle = this.config.shadowColor;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.arc(cx, cy, R * 1.3, startAngle, endAngle);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Shadow zone label
+            const midAngle = (startAngle + endAngle) / 2;
+            const labelR = R * 1.15;
+            ctx.fillStyle = 'rgba(255, 100, 100, 0.7)';
+            ctx.font = '10px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(
+                'SHADOW ZONE',
+                cx + labelR * Math.cos(midAngle),
+                cy + labelR * Math.sin(midAngle)
+            );
+        }
+    }
+    
+    drawSeismicRays(cx, cy, R, phase) {
+        const ctx = this.ctx;
+        
+        for (const ray of this.rays) {
+            if (ray.points.length < 2) continue;
+            
+            // Animate ray propagation
+            const progress = (phase + ray.takeoffAngle / Math.PI) % 1;
+            const visibleLength = progress;
+            
+            ctx.beginPath();
+            ctx.moveTo(ray.points[0].x, ray.points[0].y);
+            
+            // Draw ray path
+            for (let i = 1; i < ray.points.length; i++) {
+                const p = ray.points[i];
+                ctx.lineTo(p.x, p.y);
+            }
+            
+            // Color based on whether ray hits core
+            if (ray.hitsCore) {
+                ctx.strokeStyle = `rgba(255, 150, 100, ${0.3 + this.seismicAmplitude * 0.4})`;
+            } else {
+                ctx.strokeStyle = `rgba(74, 158, 255, ${0.4 + this.seismicAmplitude * 0.5})`;
+            }
+            
+            ctx.lineWidth = 1 + this.seismicAmplitude;
+            ctx.stroke();
+            
+            // Draw wavefront
+            if (progress > 0 && progress < 1) {
+                const totalDist = this.getRayLength(ray);
+                const wavefrontDist = totalDist * progress;
+                const wavefrontPos = this.getPointAtDistance(ray, wavefrontDist);
+                
+                if (wavefrontPos) {
+                    ctx.fillStyle = ray.hitsCore 
+                        ? 'rgba(255, 200, 150, 0.8)'
+                        : 'rgba(100, 180, 255, 0.8)';
+                    ctx.beginPath();
+                    ctx.arc(wavefrontPos.x, wavefrontPos.y, 3 + this.seismicAmplitude * 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+    }
+    
+    getRayLength(ray) {
+        let length = 0;
+        for (let i = 1; i < ray.points.length; i++) {
+            const dx = ray.points[i].x - ray.points[i-1].x;
+            const dy = ray.points[i].y - ray.points[i-1].y;
+            length += Math.sqrt(dx * dx + dy * dy);
+        }
+        return length;
+    }
+    
+    getPointAtDistance(ray, distance) {
+        let traveled = 0;
+        for (let i = 1; i < ray.points.length; i++) {
+            const dx = ray.points[i].x - ray.points[i-1].x;
+            const dy = ray.points[i].y - ray.points[i-1].y;
+            const segLength = Math.sqrt(dx * dx + dy * dy);
+            
+            if (traveled + segLength >= distance) {
+                const t = (distance - traveled) / segLength;
+                return {
+                    x: ray.points[i-1].x + dx * t,
+                    y: ray.points[i-1].y + dy * t
+                };
+            }
+            traveled += segLength;
+        }
+        return ray.points[ray.points.length - 1];
+    }
+    
+    drawEpicenter(cx, cy, R) {
+        const ctx = this.ctx;
+        const epicX = cx + R * Math.cos(this.epicenterAngle);
+        const epicY = cy + R * Math.sin(this.epicenterAngle);
+        
+        // Pulsing glow
+        const pulseSize = 8 + this.seismicAmplitude * 15 + Math.sin(this.animationPhase * Math.PI * 2) * 3;
+        
+        const glowGradient = ctx.createRadialGradient(epicX, epicY, 0, epicX, epicY, pulseSize * 2);
+        glowGradient.addColorStop(0, 'rgba(255, 100, 100, 0.8)');
+        glowGradient.addColorStop(0.5, 'rgba(255, 50, 50, 0.4)');
+        glowGradient.addColorStop(1, 'transparent');
+        
+        ctx.fillStyle = glowGradient;
+        ctx.beginPath();
+        ctx.arc(epicX, epicY, pulseSize * 2, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Epicenter marker
+        ctx.fillStyle = '#ff4444';
+        ctx.beginPath();
+        ctx.arc(epicX, epicY, 5, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Label
+        ctx.fillStyle = '#ff8888';
+        ctx.font = '9px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('EPICENTER', epicX, epicY - 15);
+    }
+    
+    drawStation(cx, cy, R) {
+        const ctx = this.ctx;
+        
+        // Station at a fixed angular distance (e.g., 80° - within good reception zone)
+        const stationAngle = this.epicenterAngle + Math.PI * 0.44; // ~80°
+        const stationX = cx + R * Math.cos(stationAngle);
+        const stationY = cy + R * Math.sin(stationAngle);
+        
+        // Station marker
+        ctx.fillStyle = '#4aff9e';
+        ctx.beginPath();
+        ctx.arc(stationX, stationY, 4, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Antenna
+        ctx.strokeStyle = '#4aff9e';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(stationX, stationY);
+        ctx.lineTo(stationX + 8, stationY - 12);
+        ctx.stroke();
+        
+        // Reception indicator (pulses with signal)
+        if (this.seismicAmplitude > 0.1) {
+            ctx.strokeStyle = `rgba(74, 255, 158, ${this.seismicAmplitude * 0.6})`;
+            ctx.beginPath();
+            ctx.arc(stationX, stationY, 10 + this.seismicAmplitude * 10, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        
+        ctx.fillStyle = '#4aff9e';
+        ctx.font = '8px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('IU.ANMO', stationX, stationY + 15);
+    }
+    
+    animate() {
+        const step = () => {
+            this.animationPhase = (this.animationPhase + this.config.waveSpeed) % 1;
+            this.draw(this.animationPhase);
+            this.animationId = requestAnimationFrame(step);
+        };
+        step();
+    }
+    
+    stop() {
+        if (this.animationId) {
+            cancelAnimationFrame(this.animationId);
+        }
+    }
+}
+```
+
+#### Integration with Main System
+
+```javascript
+// Add shadow zone canvas to HTML
+<div class="visualization-container">
+    <canvas id="phaseCanvas"></canvas>
+    <canvas id="shadowZoneCanvas"></canvas>
+</div>
+
+// Toggle between visualizations
+let shadowViz = null;
+let activeViz = 'phase'; // 'phase' or 'shadow'
+
+function initShadowZone() {
+    const canvas = document.getElementById('shadowZoneCanvas');
+    shadowViz = new ShadowZoneVisualizer(canvas, {
+        earthRadius: Math.min(canvas.width, canvas.height) * 0.38
+    });
+}
+
+function updateVisualization() {
+    if (activeViz === 'shadow' && shadowViz) {
+        const seismicFeatures = getSeismicFeatures();
+        shadowViz.setSeismicAmplitude(seismicFeatures.amplitude);
+        
+        // Set epicenter from earthquake data
+        if (quakeInfo?.coordinates) {
+            shadowViz.setEpicenter(
+                quakeInfo.coordinates[0], // longitude
+                quakeInfo.coordinates[1]  // latitude
+            );
+        }
+    }
+}
+```
+
+---
+
+## IV. ADDITIONAL ENHANCEMENT RECOMMENDATIONS
+
+### A. Spectral Freeze / Stasis Effects
+
+When the state approaches an attractor closely, implement spectral freezing:
+
+```javascript
+function applySpectralFreeze(proximityToAttractor) {
+    if (proximityToAttractor < 0.1) {
+        // Near attractor - freeze spectrum
+        granulator.updateConfig({
+            pitchVar: 0.01,           // Minimal pitch variation
+            positionSpread: 0.02,     // Minimal position spread
+            density: Math.max(2, currentParams.density * 0.3),
+            grainSize: currentParams.grainDuration * 2  // Longer, more stable grains
+        });
+    }
+}
+```
+
+### B. Multi-Station Triangulation
+
+Fetch data from multiple IRIS stations and create spatial audio field:
+
+```javascript
+const STATIONS = [
+    { net: "IU", sta: "ANMO", azimuth: 0 },     // New Mexico
+    { net: "IU", sta: "HRV", azimuth: 60 },     // Massachusetts  
+    { net: "IU", sta: "COR", azimuth: -30 },    // Oregon
+];
+
+// Create multiple granulators with different pan positions
+stations.forEach(station => {
+    const panAngle = station.azimuth * Math.PI / 180;
+    const granulator = new SeismicGranulator(audioCtx, stationBuffer[station.sta], {
+        panSpread: 0.3,
+        panCenter: Math.sin(panAngle)
+    });
+});
+```
+
+### C. Harmonic Resonance Based on Depth
+
+Map earthquake depth to resonant filter banks:
+
+```javascript
+function getDepthResonance(depthKm) {
+    // Crustal earthquakes: higher frequencies
+    // Deep earthquakes: sub-bass emphasis
+    
+    if (depthKm < 70) {
+        return { lowCut: 200, highBoost: 2000, resonance: 4 };
+    } else if (depthKm < 300) {
+        return { lowCut: 80, highBoost: 800, resonance: 6 };
+    } else {
+        return { lowCut: 30, highBoost: 300, resonance: 8 };
+    }
+}
+```
+
+### D. Real-Time FFT Visualization
+
+Add frequency spectrum display synchronized with grain output:
+
+```javascript
+const analyser = audioCtx.createAnalyser();
+analyser.fftSize = 2048;
+masterGain.connect(analyser);
+
+function drawSpectrum() {
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(data);
+    
+    // Draw frequency bars mapped to attractor colors
+    // Low frequencies → Drone attractor color
+    // Mid frequencies → Texture/Pulse colors
+    // High frequencies → Sparse attractor color
+}
+```
+
+---
+
+## V. SUMMARY OF CRITICAL FIXES
+
+| Priority | Issue | Solution |
+|----------|-------|----------|
+| **HIGH** | Oscillator grains don't use seismic buffer | Implement true sample-based `SeismicGranulator` |
+| **HIGH** | No shadow zone visualization | Add `ShadowZoneVisualizer` with ray tracing |
+| **MED** | Basic MiniSEED parser | Consider using `seisplotjs` library |
+| **MED** | Fixed station (ANMO only) | Add multi-station support |
+| **LOW** | Simple reverb impulse | Use measured impulse responses |
+| **LOW** | No FFT visualization | Add real-time spectrum analysis |
+
+---
+
+## VI. PHILOSOPHICAL ALIGNMENT
+
+These enhancements maintain the project's core thesis: **Earth as instrument, not data source**. The shadow zone visualization makes the planet's internal structure viscerally present, while true granular synthesis preserves the textural character of seismic events rather than abstracting them into pure synthesis parameters. The result is "musification" that honors geological reality while creating genuinely musical output.
+
+---
+
+*Document generated for SOS Project · D.V.R. / SHOOK · 2025*

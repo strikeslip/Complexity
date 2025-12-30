@@ -1,0 +1,1218 @@
+<!--
+[SOS - Sounds Of Seismic] - Attractor Dynamics Prototype
+https://sos.allshookup.org/
+Copyright (c) [2025] [SHOOK aka D.V.R.]
+
+Implements: Attractor Dynamics, KC-Informed Complexity, Look-ahead Grain Scheduling
+Based on: "Sounds of Seismic: A Technical and Conceptual Thesis"
+
+SOS is free software: MIT License (https://opensource.org/license/mit)
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8">
+    <title>SOS — Sounds of Seismic</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        :root {
+            --bg-deep: #08080c;
+            --bg-surface: #0c0c12;
+            --text-primary: #e8e8ec;
+            --text-secondary: #6a6a78;
+            --text-dim: #3a3a48;
+            --accent: #4a9eff;
+            --accent-dim: #1a3a5a;
+            --attractor-drone: #2d5a4a;
+            --attractor-texture: #5a4a2d;
+            --attractor-pulse: #4a2d5a;
+            --attractor-sparse: #2d3a5a;
+            --seismic-glow: rgba(74, 158, 255, 0.15);
+        }
+        
+        body {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow: hidden;
+        }
+        
+        .container {
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 24px;
+        }
+        
+        /* Phase Space Visualization */
+        .phase-space {
+            width: 100%;
+            aspect-ratio: 16/9;
+            max-height: 400px;
+            background: var(--bg-surface);
+            border-radius: 4px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 0 60px var(--seismic-glow);
+        }
+        
+        #phaseCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        /* Header - minimal */
+        .header {
+            text-align: center;
+            opacity: 0.9;
+        }
+        
+        .title {
+            font-size: 11px;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        
+        .subtitle {
+            font-size: 9px;
+            letter-spacing: 2px;
+            color: var(--text-dim);
+        }
+        
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 12px;
+        }
+        
+        button {
+            background: transparent;
+            border: 1px solid var(--text-dim);
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 10px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            padding: 10px 24px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-radius: 2px;
+        }
+        
+        button:hover:not(:disabled) {
+            border-color: var(--accent);
+            color: var(--accent);
+            box-shadow: 0 0 20px var(--seismic-glow);
+        }
+        
+        button:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+        
+        button.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: var(--bg-deep);
+        }
+        
+        /* Status Display */
+        .status {
+            text-align: center;
+            font-size: 10px;
+            color: var(--text-dim);
+            line-height: 1.8;
+            min-height: 60px;
+        }
+        
+        .status a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        
+        .status .magnitude {
+            color: var(--accent);
+            font-size: 12px;
+        }
+        
+        .status .location {
+            color: var(--text-secondary);
+        }
+        
+        /* Metrics Display */
+        .metrics {
+            display: flex;
+            gap: 32px;
+            font-size: 9px;
+            color: var(--text-dim);
+            letter-spacing: 1px;
+        }
+        
+        .metric {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .metric-value {
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 300;
+        }
+        
+        .metric-label {
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        /* Attractor Legend */
+        .legend {
+            display: flex;
+            gap: 16px;
+            font-size: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-dim);
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .legend-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+        
+        .legend-dot.drone { background: var(--attractor-drone); }
+        .legend-dot.texture { background: var(--attractor-texture); }
+        .legend-dot.pulse { background: var(--attractor-pulse); }
+        .legend-dot.sparse { background: var(--attractor-sparse); }
+        
+        /* Loading state */
+        .loading .phase-space {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 30px var(--seismic-glow); }
+            50% { box-shadow: 0 0 60px var(--seismic-glow); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="title">Sounds of Seismic</div>
+            <div class="subtitle">Attractor Dynamics · Seismic Sonification</div>
+        </div>
+        
+        <div class="phase-space">
+            <canvas id="phaseCanvas"></canvas>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item"><div class="legend-dot drone"></div>Drone</div>
+            <div class="legend-item"><div class="legend-dot texture"></div>Texture</div>
+            <div class="legend-item"><div class="legend-dot pulse"></div>Pulse</div>
+            <div class="legend-item"><div class="legend-dot sparse"></div>Sparse</div>
+        </div>
+        
+        <div class="metrics">
+            <div class="metric">
+                <div class="metric-value" id="kcValue">—</div>
+                <div class="metric-label">Complexity</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="entropyValue">—</div>
+                <div class="metric-label">Entropy</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="attractorValue">—</div>
+                <div class="metric-label">Attractor</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="densityValue">—</div>
+                <div class="metric-label">Density</div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button id="startBtn">Begin</button>
+            <button id="stopBtn" disabled>End</button>
+        </div>
+        
+        <div class="status" id="status">
+            Seismic attractor dynamics sonification<br>
+            Press Begin to fetch earthquake data
+        </div>
+    </div>
+
+    <script>
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CONFIGURATION
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    const CONFIG = {
+        seismicDurationS: 60,
+        sampleRate: 44100,
+        minMagnitude: 6.0,
+        fetchDays: 30,
+        station: { net: "IU", sta: "ANMO", loc: "00", cha: "BHZ" },
+        
+        // Attractor dynamics
+        attractorCount: 4,
+        stateUpdateRate: 60,        // Hz
+        trajectoryLength: 200,      // points to keep
+        noiseLevel: 0.002,
+        
+        // Grain scheduling
+        scheduleAheadTime: 0.1,     // seconds to schedule ahead
+        schedulerInterval: 25,      // ms between scheduler runs
+        
+        // KC targets
+        targetKC: { quiet: 0.4, active: 0.7 }
+    };
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MUSICAL SCALES AND HARMONICS
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    const SCALES = {
+        pentatonic: [0, 2, 4, 7, 9],
+        minor: [0, 2, 3, 5, 7, 8, 10],
+        harmonicMinor: [0, 2, 3, 5, 7, 8, 11],
+        dorian: [0, 2, 3, 5, 7, 9, 10],
+        phrygian: [0, 1, 3, 5, 7, 8, 10]
+    };
+    
+    const ATTRACTOR_CONFIGS = [
+        { 
+            name: 'Drone',
+            position: { x: 0.2, y: 0.2 },
+            strength: 0.8,
+            color: '#2d5a4a',
+            params: {
+                density: 8,
+                grainDuration: 0.4,
+                frequencyMult: 0.5,
+                spread: 0.1,
+                waveform: 'sine',
+                filterQ: 1,
+                scale: 'pentatonic'
+            }
+        },
+        {
+            name: 'Texture',
+            position: { x: 0.8, y: 0.3 },
+            strength: 0.6,
+            color: '#5a4a2d',
+            params: {
+                density: 45,
+                grainDuration: 0.06,
+                frequencyMult: 2,
+                spread: 0.8,
+                waveform: 'triangle',
+                filterQ: 4,
+                scale: 'dorian'
+            }
+        },
+        {
+            name: 'Pulse',
+            position: { x: 0.7, y: 0.8 },
+            strength: 0.5,
+            color: '#4a2d5a',
+            params: {
+                density: 20,
+                grainDuration: 0.08,
+                frequencyMult: 1,
+                spread: 0.3,
+                waveform: 'sawtooth',
+                filterQ: 8,
+                scale: 'harmonicMinor'
+            }
+        },
+        {
+            name: 'Sparse',
+            position: { x: 0.25, y: 0.75 },
+            strength: 0.7,
+            color: '#2d3a5a',
+            params: {
+                density: 4,
+                grainDuration: 0.8,
+                frequencyMult: 0.25,
+                spread: 0.05,
+                waveform: 'sine',
+                filterQ: 2,
+                scale: 'phrygian'
+            }
+        }
+    ];
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GLOBAL STATE
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    let audioCtx = null;
+    let masterGain, compressor, reverb, reverbWet, delay, delayFeedback;
+    let seismicData = [];
+    let seismicBuffer = null;
+    let isPlaying = false;
+    let quakeInfo = null;
+    
+    // Dynamical system state
+    let state = { x: 0.5, y: 0.5 };
+    let velocity = { x: 0, y: 0 };
+    let trajectory = [];
+    let currentAttractor = null;
+    let seismicPlayhead = 0;
+    
+    // Synthesis state
+    let currentParams = {};
+    let grainSchedulerId = null;
+    let stateUpdateId = null;
+    let nextGrainTime = 0;
+    let rootFreq = 110;
+    
+    // Metrics
+    let recentEvents = [];
+    let currentKC = 0;
+    let currentEntropy = 0;
+    
+    // Visualization
+    let canvas, ctx;
+    let animationId = null;
+    
+    // DOM
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusEl = document.getElementById('status');
+    const kcEl = document.getElementById('kcValue');
+    const entropyEl = document.getElementById('entropyValue');
+    const attractorEl = document.getElementById('attractorValue');
+    const densityEl = document.getElementById('densityValue');
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SEISMIC DATA PARSING (PRESERVED FROM ONE.html)
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    function parseMiniSEED(buffer) {
+        try {
+            const view = new DataView(buffer);
+            if (buffer.byteLength < 64) throw new Error("Buffer too small for MiniSEED header.");
+            const numSamples = view.getInt16(46, false);
+            const dataOffset = 64;
+            if (numSamples <= 0 || buffer.byteLength < dataOffset + numSamples * 4) 
+                throw new Error(`Invalid sample count (${numSamples}) or buffer size.`);
+            const rawData = new Int32Array(buffer.slice(dataOffset, dataOffset + numSamples * 4));
+            const maxVal = rawData.reduce((max, val) => Math.max(max, Math.abs(val)), 0);
+            if (maxVal === 0) return new Float32Array(rawData.length);
+            const factor = 1.0 / maxVal;
+            const normalized = new Float32Array(rawData.length);
+            for (let i = 0; i < rawData.length; i++) normalized[i] = rawData[i] * factor;
+            return normalized;
+        } catch (error) {
+            console.error("MiniSEED Parsing Error:", error);
+            // Fallback: generate noise with seismic-like envelope
+            const fallback = new Float32Array(4096);
+            for (let i = 0; i < fallback.length; i++) {
+                const env = Math.exp(-i / 2000) * (1 + Math.sin(i * 0.01) * 0.3);
+                fallback[i] = (Math.random() * 2 - 1) * env;
+            }
+            return fallback;
+        }
+    }
+    
+    async function fetchLatestEvent() {
+        const end = new Date().toISOString();
+        const start = new Date(Date.now() - CONFIG.fetchDays * 86400000).toISOString();
+        const url = `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=${start}&endtime=${end}&minmagnitude=${CONFIG.minMagnitude}&orderby=time`;
+        try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`USGS fetch failed: ${res.status}`);
+            const data = await res.json();
+            if (!data.features?.length) throw new Error(`No M${CONFIG.minMagnitude}+ events found`);
+            return data.features[0];
+        } catch (error) {
+            console.error("Event fetch error:", error);
+            setStatus(`Error: ${error.message}`, true);
+            return null;
+        }
+    }
+    
+    async function fetchMiniSEED(eventTime) {
+        const startTime = new Date(new Date(eventTime).getTime() - 5000).toISOString();
+        const endTime = new Date(new Date(startTime).getTime() + CONFIG.seismicDurationS * 1000).toISOString();
+        const { net, sta, loc, cha } = CONFIG.station;
+        const url = `https://service.iris.edu/fdsnws/dataselect/1/query?net=${net}&sta=${sta}&loc=${loc}&cha=${cha}&starttime=${startTime}&endtime=${endTime}&format=miniseed`;
+        try {
+            const res = await fetch(url);
+            if (!res.ok || res.status === 204) throw new Error(`IRIS fetch failed: ${res.status}`);
+            return await res.arrayBuffer();
+        } catch (error) {
+            console.error("MiniSEED fetch error:", error);
+            setStatus(`Error: ${error.message}`, true);
+            return null;
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ATTRACTOR DYNAMICS ENGINE
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    function getSeismicFeatures() {
+        if (!seismicData.length) return { amplitude: 0, derivative: 0, rms: 0 };
+        
+        const idx = Math.floor(seismicPlayhead * seismicData.length);
+        const windowSize = 50;
+        
+        // Current amplitude
+        const amplitude = Math.abs(seismicData[idx] || 0);
+        
+        // Derivative (rate of change)
+        let derivative = 0;
+        if (idx > 0 && idx < seismicData.length - 1) {
+            derivative = Math.abs(seismicData[idx + 1] - seismicData[idx - 1]) / 2;
+        }
+        
+        // RMS over window
+        let rmsSum = 0;
+        const start = Math.max(0, idx - windowSize);
+        const end = Math.min(seismicData.length, idx + windowSize);
+        for (let i = start; i < end; i++) {
+            rmsSum += seismicData[i] * seismicData[i];
+        }
+        const rms = Math.sqrt(rmsSum / (end - start));
+        
+        return { amplitude, derivative, rms };
+    }
+    
+    function computeAttractorForces(seismicFeatures) {
+        const { amplitude, derivative, rms } = seismicFeatures;
+        
+        // Seismic activity weakens attractors (more exploration)
+        const seismicIntensity = amplitude * 2 + rms;
+        const attractorWeakening = 1 - Math.min(0.7, seismicIntensity);
+        
+        let forceX = 0;
+        let forceY = 0;
+        let totalWeight = 0;
+        let dominantAttractor = null;
+        let maxInfluence = 0;
+        
+        for (const attractor of ATTRACTOR_CONFIGS) {
+            const dx = attractor.position.x - state.x;
+            const dy = attractor.position.y - state.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Inverse square attraction, modulated by seismic activity
+            const strength = attractor.strength * attractorWeakening;
+            const influence = strength / (distance * distance + 0.1);
+            
+            forceX += dx * influence;
+            forceY += dy * influence;
+            totalWeight += influence;
+            
+            if (influence > maxInfluence) {
+                maxInfluence = influence;
+                dominantAttractor = attractor;
+            }
+        }
+        
+        // Normalize forces
+        if (totalWeight > 0) {
+            forceX /= totalWeight;
+            forceY /= totalWeight;
+        }
+        
+        // Seismic forcing - derivative determines direction bias
+        const seismicForceX = derivative * 10 * (Math.random() - 0.5);
+        const seismicForceY = amplitude * 5 * (Math.random() - 0.5);
+        
+        // Noise term for exploration
+        const noiseX = (Math.random() - 0.5) * CONFIG.noiseLevel * (1 + seismicIntensity * 5);
+        const noiseY = (Math.random() - 0.5) * CONFIG.noiseLevel * (1 + seismicIntensity * 5);
+        
+        return {
+            x: forceX * 0.02 + seismicForceX + noiseX,
+            y: forceY * 0.02 + seismicForceY + noiseY,
+            dominantAttractor
+        };
+    }
+    
+    function updateDynamicalState() {
+        if (!isPlaying) return;
+        
+        const seismicFeatures = getSeismicFeatures();
+        const forces = computeAttractorForces(seismicFeatures);
+        
+        // Update velocity with damping
+        velocity.x = velocity.x * 0.95 + forces.x;
+        velocity.y = velocity.y * 0.95 + forces.y;
+        
+        // Update position
+        state.x += velocity.x;
+        state.y += velocity.y;
+        
+        // Boundary reflection
+        if (state.x < 0) { state.x = 0; velocity.x *= -0.5; }
+        if (state.x > 1) { state.x = 1; velocity.x *= -0.5; }
+        if (state.y < 0) { state.y = 0; velocity.y *= -0.5; }
+        if (state.y > 1) { state.y = 1; velocity.y *= -0.5; }
+        
+        // Record trajectory
+        trajectory.push({ x: state.x, y: state.y });
+        if (trajectory.length > CONFIG.trajectoryLength) trajectory.shift();
+        
+        // Update current attractor
+        currentAttractor = forces.dominantAttractor;
+        
+        // Interpolate synthesis parameters from attractors
+        updateSynthesisParams(seismicFeatures);
+        
+        // Advance seismic playhead
+        const playbackSpeed = 0.00005 * (1 + seismicFeatures.amplitude);
+        seismicPlayhead += playbackSpeed;
+        if (seismicPlayhead >= 1) seismicPlayhead = 0;
+        
+        // Update KC estimate
+        updateComplexityMetrics();
+    }
+    
+    function updateSynthesisParams(seismicFeatures) {
+        // Blend parameters based on distance to each attractor
+        let totalWeight = 0;
+        const blended = {
+            density: 0,
+            grainDuration: 0,
+            frequencyMult: 0,
+            spread: 0,
+            filterQ: 0
+        };
+        
+        for (const attractor of ATTRACTOR_CONFIGS) {
+            const dx = attractor.position.x - state.x;
+            const dy = attractor.position.y - state.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const weight = 1 / (distance + 0.1);
+            
+            blended.density += attractor.params.density * weight;
+            blended.grainDuration += attractor.params.grainDuration * weight;
+            blended.frequencyMult += attractor.params.frequencyMult * weight;
+            blended.spread += attractor.params.spread * weight;
+            blended.filterQ += attractor.params.filterQ * weight;
+            
+            totalWeight += weight;
+        }
+        
+        // Normalize
+        blended.density /= totalWeight;
+        blended.grainDuration /= totalWeight;
+        blended.frequencyMult /= totalWeight;
+        blended.spread /= totalWeight;
+        blended.filterQ /= totalWeight;
+        
+        // Seismic modulation
+        const { amplitude, rms } = seismicFeatures;
+        blended.density *= (1 + amplitude * 2);
+        blended.spread *= (1 + rms * 3);
+        
+        // KC feedback adjustment
+        const targetKC = CONFIG.targetKC.quiet + amplitude * (CONFIG.targetKC.active - CONFIG.targetKC.quiet);
+        const kcError = targetKC - currentKC;
+        
+        if (kcError > 0.1) {
+            // Too simple - increase complexity
+            blended.density *= 1.1;
+            blended.spread *= 1.2;
+        } else if (kcError < -0.1) {
+            // Too complex - decrease
+            blended.density *= 0.9;
+            blended.spread *= 0.8;
+        }
+        
+        currentParams = blended;
+        
+        // Use dominant attractor's scale and waveform
+        if (currentAttractor) {
+            currentParams.scale = currentAttractor.params.scale;
+            currentParams.waveform = currentAttractor.params.waveform;
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // COMPLEXITY METRICS (KC APPROXIMATION)
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    function updateComplexityMetrics() {
+        // Simple entropy estimation from recent events
+        if (recentEvents.length < 10) {
+            currentKC = 0.5;
+            currentEntropy = 0.5;
+            return;
+        }
+        
+        // Quantize events to bins for entropy calculation
+        const bins = new Array(16).fill(0);
+        for (const event of recentEvents) {
+            const bin = Math.floor(event.freq / 1000 * 15);
+            bins[Math.min(15, Math.max(0, bin))]++;
+        }
+        
+        // Shannon entropy
+        let entropy = 0;
+        const total = recentEvents.length;
+        for (const count of bins) {
+            if (count > 0) {
+                const p = count / total;
+                entropy -= p * Math.log2(p);
+            }
+        }
+        entropy /= 4; // Normalize to 0-1 range
+        
+        // Approximate KC via compression-like metric
+        // Higher variation in intervals = higher KC
+        let intervalVariance = 0;
+        for (let i = 1; i < recentEvents.length; i++) {
+            const interval = recentEvents[i].time - recentEvents[i-1].time;
+            intervalVariance += interval * interval;
+        }
+        intervalVariance /= recentEvents.length;
+        
+        currentKC = Math.min(1, Math.sqrt(intervalVariance) * 10 + entropy * 0.5);
+        currentEntropy = Math.min(1, entropy);
+        
+        // Trim old events
+        const now = audioCtx?.currentTime || 0;
+        recentEvents = recentEvents.filter(e => now - e.time < 5);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LOOK-AHEAD GRAIN SCHEDULER
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    function scheduleGrains() {
+        if (!isPlaying || !audioCtx) return;
+        
+        const currentTime = audioCtx.currentTime;
+        const scheduleUntil = currentTime + CONFIG.scheduleAheadTime;
+        
+        while (nextGrainTime < scheduleUntil) {
+            scheduleGrain(nextGrainTime);
+            
+            // Calculate next grain time based on current density
+            const interval = 1 / Math.max(1, currentParams.density || 10);
+            const jitter = interval * 0.3 * (Math.random() - 0.5);
+            nextGrainTime += interval + jitter;
+        }
+    }
+    
+    function scheduleGrain(time) {
+        if (!audioCtx || !currentParams.density) return;
+        
+        const scale = SCALES[currentParams.scale || 'pentatonic'];
+        const baseFreq = rootFreq * (currentParams.frequencyMult || 1);
+        
+        // Select pitch from scale with spread
+        const octaveOffset = Math.floor((Math.random() - 0.5) * 4);
+        const scaleIndex = Math.floor(Math.random() * scale.length);
+        const semitone = scale[scaleIndex] + octaveOffset * 12;
+        let freq = baseFreq * Math.pow(2, semitone / 12);
+        
+        // Apply spread
+        freq *= 1 + (Math.random() - 0.5) * (currentParams.spread || 0.1);
+        freq = Math.max(30, Math.min(8000, freq));
+        
+        const duration = Math.max(0.02, currentParams.grainDuration || 0.1);
+        const amplitude = 0.15 * (0.7 + Math.random() * 0.3);
+        const pan = (Math.random() - 0.5) * 1.6;
+        
+        // Create grain with Hanning window envelope
+        createGrain(time, freq, duration, amplitude, pan);
+        
+        // Record event for KC calculation
+        recentEvents.push({ time, freq, duration });
+    }
+    
+    function createGrain(startTime, freq, duration, amplitude, pan) {
+        // Oscillator
+        const osc = audioCtx.createOscillator();
+        osc.type = currentParams.waveform || 'sine';
+        osc.frequency.setValueAtTime(freq, startTime);
+        
+        // Slight detune for richness
+        osc.detune.setValueAtTime((Math.random() - 0.5) * 15, startTime);
+        
+        // Hanning window envelope
+        const env = audioCtx.createGain();
+        const attackTime = duration * 0.3;
+        const releaseTime = duration * 0.5;
+        
+        env.gain.setValueAtTime(0, startTime);
+        env.gain.linearRampToValueAtTime(amplitude, startTime + attackTime);
+        env.gain.setValueAtTime(amplitude, startTime + duration - releaseTime);
+        env.gain.linearRampToValueAtTime(0, startTime + duration);
+        
+        // Filter
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(freq * 3, startTime);
+        filter.Q.setValueAtTime(currentParams.filterQ || 2, startTime);
+        
+        // Panner
+        const panner = audioCtx.createStereoPanner();
+        panner.pan.setValueAtTime(pan, startTime);
+        
+        // Connect
+        osc.connect(filter);
+        filter.connect(env);
+        env.connect(panner);
+        panner.connect(compressor);
+        
+        // Also send to effects
+        if (reverb) {
+            const reverbSend = audioCtx.createGain();
+            reverbSend.gain.value = 0.3;
+            env.connect(reverbSend);
+            reverbSend.connect(reverb);
+        }
+        
+        if (delay) {
+            const delaySend = audioCtx.createGain();
+            delaySend.gain.value = 0.15;
+            env.connect(delaySend);
+            delaySend.connect(delay);
+        }
+        
+        // Start and stop
+        osc.start(startTime);
+        osc.stop(startTime + duration + 0.05);
+        
+        // Cleanup
+        osc.onended = () => {
+            try {
+                osc.disconnect();
+                filter.disconnect();
+                env.disconnect();
+                panner.disconnect();
+            } catch(e) {}
+        };
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SUB-BASS DRONE
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    let droneOsc, droneLfo, droneGain;
+    
+    function startDrone() {
+        droneOsc = audioCtx.createOscillator();
+        droneOsc.type = 'sine';
+        droneOsc.frequency.value = rootFreq / 4;
+        
+        droneLfo = audioCtx.createOscillator();
+        droneLfo.frequency.value = 0.03 + Math.random() * 0.02;
+        
+        const lfoGain = audioCtx.createGain();
+        lfoGain.gain.value = rootFreq / 4 * 0.02;
+        
+        droneGain = audioCtx.createGain();
+        droneGain.gain.value = 0;
+        
+        droneLfo.connect(lfoGain);
+        lfoGain.connect(droneOsc.frequency);
+        droneOsc.connect(droneGain);
+        droneGain.connect(masterGain);
+        
+        droneOsc.start();
+        droneLfo.start();
+        
+        // Fade in
+        droneGain.gain.setTargetAtTime(0.2, audioCtx.currentTime, 3);
+    }
+    
+    function stopDrone() {
+        if (droneGain) {
+            droneGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.5);
+        }
+        setTimeout(() => {
+            try {
+                droneOsc?.stop();
+                droneLfo?.stop();
+            } catch(e) {}
+        }, 1000);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AUDIO SETUP
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    async function initAudio() {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ 
+            sampleRate: CONFIG.sampleRate 
+        });
+        
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+        
+        // Compressor
+        compressor = audioCtx.createDynamicsCompressor();
+        compressor.threshold.value = -20;
+        compressor.ratio.value = 4;
+        compressor.attack.value = 0.005;
+        compressor.release.value = 0.1;
+        
+        // Master gain
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0;
+        
+        compressor.connect(masterGain);
+        masterGain.connect(audioCtx.destination);
+        
+        // Reverb
+        await createReverb();
+        
+        // Delay
+        createDelay();
+    }
+    
+    async function createReverb() {
+        const length = 3 * audioCtx.sampleRate;
+        const impulse = audioCtx.createBuffer(2, length, audioCtx.sampleRate);
+        
+        for (let ch = 0; ch < 2; ch++) {
+            const data = impulse.getChannelData(ch);
+            for (let i = 0; i < length; i++) {
+                // Filtered decay for less harsh reverb
+                const decay = Math.pow(1 - i / length, 2.5);
+                const noise = Math.random() * 2 - 1;
+                data[i] = noise * decay * (1 - (i / length) * 0.5);
+            }
+        }
+        
+        reverb = audioCtx.createConvolver();
+        reverb.buffer = impulse;
+        
+        reverbWet = audioCtx.createGain();
+        reverbWet.gain.value = 0.35;
+        
+        reverb.connect(reverbWet);
+        reverbWet.connect(masterGain);
+    }
+    
+    function createDelay() {
+        delay = audioCtx.createDelay(2);
+        delay.delayTime.value = 0.4;
+        
+        delayFeedback = audioCtx.createGain();
+        delayFeedback.gain.value = 0.4;
+        
+        const delayWet = audioCtx.createGain();
+        delayWet.gain.value = 0.25;
+        
+        const delayFilter = audioCtx.createBiquadFilter();
+        delayFilter.type = 'lowpass';
+        delayFilter.frequency.value = 2000;
+        
+        delay.connect(delayFilter);
+        delayFilter.connect(delayFeedback);
+        delayFeedback.connect(delay);
+        delayFilter.connect(delayWet);
+        delayWet.connect(masterGain);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VISUALIZATION
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    function initCanvas() {
+        canvas = document.getElementById('phaseCanvas');
+        ctx = canvas.getContext('2d');
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+    }
+    
+    function resizeCanvas() {
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * devicePixelRatio;
+        canvas.height = rect.height * devicePixelRatio;
+        ctx.scale(devicePixelRatio, devicePixelRatio);
+    }
+    
+    function drawPhaseSpace() {
+        if (!ctx) return;
+        
+        const w = canvas.width / devicePixelRatio;
+        const h = canvas.height / devicePixelRatio;
+        
+        // Clear with fade trail effect
+        ctx.fillStyle = 'rgba(8, 8, 12, 0.15)';
+        ctx.fillRect(0, 0, w, h);
+        
+        // Draw attractor basins (subtle)
+        for (const attractor of ATTRACTOR_CONFIGS) {
+            const ax = attractor.position.x * w;
+            const ay = attractor.position.y * h;
+            const radius = attractor.strength * 80;
+            
+            const gradient = ctx.createRadialGradient(ax, ay, 0, ax, ay, radius);
+            gradient.addColorStop(0, attractor.color + '30');
+            gradient.addColorStop(1, 'transparent');
+            
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(ax, ay, radius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Attractor point
+            ctx.fillStyle = attractor.color;
+            ctx.beginPath();
+            ctx.arc(ax, ay, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        // Draw trajectory
+        if (trajectory.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(trajectory[0].x * w, trajectory[0].y * h);
+            
+            for (let i = 1; i < trajectory.length; i++) {
+                ctx.lineTo(trajectory[i].x * w, trajectory[i].y * h);
+            }
+            
+            ctx.strokeStyle = 'rgba(74, 158, 255, 0.4)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+        
+        // Draw current state
+        const sx = state.x * w;
+        const sy = state.y * h;
+        
+        // Glow
+        const glowGradient = ctx.createRadialGradient(sx, sy, 0, sx, sy, 30);
+        glowGradient.addColorStop(0, 'rgba(74, 158, 255, 0.5)');
+        glowGradient.addColorStop(1, 'transparent');
+        ctx.fillStyle = glowGradient;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 30, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Point
+        ctx.fillStyle = '#4a9eff';
+        ctx.beginPath();
+        ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Seismic activity indicator (border glow intensity)
+        if (seismicData.length) {
+            const idx = Math.floor(seismicPlayhead * seismicData.length);
+            const amp = Math.abs(seismicData[idx] || 0);
+            
+            ctx.strokeStyle = `rgba(74, 158, 255, ${amp * 0.8})`;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, w, h);
+        }
+        
+        if (isPlaying) {
+            animationId = requestAnimationFrame(drawPhaseSpace);
+        }
+    }
+    
+    function updateMetricsDisplay() {
+        if (!isPlaying) return;
+        
+        kcEl.textContent = currentKC.toFixed(2);
+        entropyEl.textContent = currentEntropy.toFixed(2);
+        attractorEl.textContent = currentAttractor?.name || '—';
+        densityEl.textContent = Math.round(currentParams.density || 0);
+        
+        requestAnimationFrame(updateMetricsDisplay);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CONTROL FLOW
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    function setStatus(message, isError = false) {
+        statusEl.innerHTML = `<span style="color: ${isError ? '#ff6666' : 'inherit'}">${message}</span>`;
+    }
+    
+    function formatTime(dateString) {
+        const d = new Date(dateString);
+        return d.toLocaleString();
+    }
+    
+    async function start() {
+        if (isPlaying) return;
+        
+        startBtn.disabled = true;
+        document.body.classList.add('loading');
+        
+        try {
+            setStatus('Initializing audio system...');
+            await initAudio();
+            
+            setStatus('Fetching earthquake data...');
+            const event = await fetchLatestEvent();
+            if (!event) {
+                stop();
+                return;
+            }
+            
+            quakeInfo = {
+                place: event.properties.place || 'Unknown',
+                mag: event.properties.mag || 0,
+                depth: event.geometry.coordinates[2] || 0,
+                time: new Date(event.properties.time).toISOString(),
+                url: `https://earthquake.usgs.gov/earthquakes/eventpage/${event.id}/executive`
+            };
+            
+            setStatus(`Found M${quakeInfo.mag.toFixed(1)} · Fetching waveform...`);
+            
+            const miniSEED = await fetchMiniSEED(quakeInfo.time);
+            if (!miniSEED) {
+                stop();
+                return;
+            }
+            
+            seismicData = Array.from(parseMiniSEED(miniSEED));
+            
+            // Create audio buffer for potential granular playback
+            seismicBuffer = audioCtx.createBuffer(1, seismicData.length, audioCtx.sampleRate);
+            seismicBuffer.copyToChannel(new Float32Array(seismicData), 0);
+            
+            // Set root frequency based on magnitude
+            rootFreq = 55 * Math.pow(2, (quakeInfo.mag - CONFIG.minMagnitude) / 3);
+            
+            // Adjust effects based on depth
+            const depthFactor = Math.min(1, quakeInfo.depth / 600);
+            reverbWet.gain.setTargetAtTime(0.25 + depthFactor * 0.4, audioCtx.currentTime, 1);
+            delay.delayTime.setTargetAtTime(0.3 + depthFactor * 0.4, audioCtx.currentTime, 1);
+            delayFeedback.gain.setTargetAtTime(0.3 + depthFactor * 0.3, audioCtx.currentTime, 1);
+            
+            // Initialize state
+            state = { x: 0.5, y: 0.5 };
+            velocity = { x: 0, y: 0 };
+            trajectory = [];
+            seismicPlayhead = 0;
+            recentEvents = [];
+            currentParams = { ...ATTRACTOR_CONFIGS[0].params };
+            nextGrainTime = audioCtx.currentTime;
+            
+            isPlaying = true;
+            
+            // Start systems
+            startDrone();
+            
+            // State update loop (60 Hz)
+            stateUpdateId = setInterval(updateDynamicalState, 1000 / CONFIG.stateUpdateRate);
+            
+            // Grain scheduler (25ms intervals, schedules ahead)
+            grainSchedulerId = setInterval(scheduleGrains, CONFIG.schedulerInterval);
+            
+            // Visualization
+            initCanvas();
+            drawPhaseSpace();
+            updateMetricsDisplay();
+            
+            // Fade in
+            masterGain.gain.setTargetAtTime(0.7, audioCtx.currentTime, 3);
+            
+            stopBtn.disabled = false;
+            document.body.classList.remove('loading');
+            
+            setStatus(`
+                <span class="magnitude">M${quakeInfo.mag.toFixed(1)}</span> · 
+                <span class="location">${quakeInfo.place}</span><br>
+                Depth: ${quakeInfo.depth.toFixed(0)} km · ${formatTime(quakeInfo.time)}<br>
+                <a href="${quakeInfo.url}" target="_blank">View on USGS</a>
+            `);
+            
+        } catch (error) {
+            console.error('Startup error:', error);
+            setStatus(`Error: ${error.message}`, true);
+            stop();
+        }
+    }
+    
+    function stop() {
+        isPlaying = false;
+        
+        // Clear schedulers
+        if (stateUpdateId) clearInterval(stateUpdateId);
+        if (grainSchedulerId) clearInterval(grainSchedulerId);
+        if (animationId) cancelAnimationFrame(animationId);
+        
+        stateUpdateId = null;
+        grainSchedulerId = null;
+        animationId = null;
+        
+        // Stop drone
+        stopDrone();
+        
+        // Fade out and cleanup
+        if (audioCtx) {
+            masterGain?.gain.setTargetAtTime(0, audioCtx.currentTime, 0.5);
+            
+            setTimeout(() => {
+                audioCtx?.close();
+                audioCtx = null;
+            }, 1500);
+        }
+        
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        document.body.classList.remove('loading');
+        
+        setStatus('Sonification ended · Press Begin to restart');
+        
+        // Reset metrics display
+        kcEl.textContent = '—';
+        entropyEl.textContent = '—';
+        attractorEl.textContent = '—';
+        densityEl.textContent = '—';
+    }
+    
+    // Event listeners
+    startBtn.onclick = start;
+    stopBtn.onclick = stop;
+    
+    // Initialize canvas on load
+    initCanvas();
+    
+    // Draw initial empty state
+    ctx.fillStyle = '#0c0c12';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw attractors in initial state
+    const w = canvas.width / devicePixelRatio;
+    const h = canvas.height / devicePixelRatio;
+    for (const attractor of ATTRACTOR_CONFIGS) {
+        const ax = attractor.position.x * w;
+        const ay = attractor.position.y * h;
+        ctx.fillStyle = attractor.color + '40';
+        ctx.beginPath();
+        ctx.arc(ax, ay, 6, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    </script>
+</body>
+</html>
