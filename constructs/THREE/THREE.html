@@ -276,7 +276,7 @@ it under the terms of the MIT License (https://opensource.org/license/mit)
             const startTimeISO = new Date(new Date(eventTime).getTime() - 5000).toISOString();
             const endTimeISO = new Date(new Date(startTimeISO).getTime() + SEISMIC_DATA_DURATION_S * 1000).toISOString();
             const { net, sta, loc, cha } = STATION_INFO;
-            const url = `https://service.iris.edu/fdsnws/dataselect/1/query?net=${net}&sta=${sta}&loc=${loc}&cha=${cha}&starttime=${startTimeISO}&endtime=${endTimeISO}&format=miniseed`;
+            const url = `https://service.earthscope.edu/fdsnws/dataselect/1/query?net=${net}&sta=${sta}&loc=${loc}&cha=${cha}&starttime=${startTimeISO}&endtime=${endTimeISO}&format=miniseed`;
             console.log("Fetching MiniSEED from:", url);
             try {
                 const res = await fetch(url);
