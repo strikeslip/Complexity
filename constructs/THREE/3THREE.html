@@ -300,7 +300,7 @@ it under the terms of the MIT License (https://opensource.org/license/mit)
             const start = new Date(new Date(eventTime).getTime() - 5000).toISOString();
             const end = new Date(new Date(start).getTime() + SEISMIC_DATA_DURATION_S * 1000).toISOString();
             const { net, sta, loc, cha } = STATION_INFO;
-            const url = `https://service.iris.edu/fdsnws/dataselect/1/query?net=${net}&sta=${sta}&loc=${loc}&cha=${cha}&starttime=${start}&endtime=${end}&format=miniseed`;
+            const url = `https://service.earthscope.edu/fdsnws/dataselect/1/query?net=${net}&sta=${sta}&loc=${loc}&cha=${cha}&starttime=${start}&endtime=${end}&format=miniseed`;
             try {
                 const res = await fetch(url);
                 if (!res.ok || res.status === 204) throw new Error("IRIS fetch failed");
