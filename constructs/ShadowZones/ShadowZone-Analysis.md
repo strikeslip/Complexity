@@ -10,31 +10,31 @@ ShadowZone is a browser-based seismic waveform synthesizer that transforms real-
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           DATA PIPELINE                                  │
+│                           DATA PIPELINE                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  USGS Earthquake API  →  EarthScope MiniSEED  →  parseMiniSEED()       │
+│  USGS Earthquake API  →  EarthScope MiniSEED  →  parseMiniSEED()        │
 │       (GeoJSON)              (Binary)              (Float32Array)       │
 └─────────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         SYNTHESIS ENGINE                                 │
+│                         SYNTHESIS ENGINE                                │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐                │
-│  │ TextureCloud │   │  ToneCloud   │   │ RhythmCloud  │                │
-│  │   (Sine)     │   │ (Triangle)   │   │ (Sawtooth)   │                │
-│  │ 45 grains/s  │   │  6 grains/s  │   │ 14 grains/s  │                │
-│  └──────────────┘   └──────────────┘   └──────────────┘                │
-│          ↓                  ↓                  ↓                         │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐                 │
+│  │ TextureCloud │   │  ToneCloud   │   │ RhythmCloud  │                 │
+│  │   (Sine)     │   │ (Triangle)   │   │ (Sawtooth)   │                 │
+│  │ 45 grains/s  │   │  6 grains/s  │   │ 14 grains/s  │                 │
+│  └──────────────┘   └──────────────┘   └──────────────┘                 │
+│          ↓                  ↓                  ↓                        │
 │     ┌─────────────────────────────────────────────────────┐             │
-│     │              GranularEngine Master Filter            │             │
-│     │                 (Lowpass 1-10kHz)                    │             │
+│     │              GranularEngine Master Filter           │             │
+│     │                 (Lowpass 1-10kHz)                   │             │
 │     └─────────────────────────────────────────────────────┘             │
 └─────────────────────────────────────────────────────────────────────────┘
                                     ↓
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          EFFECTS CHAIN                                   │
+│                          EFFECTS CHAIN                                  │
 ├─────────────────────────────────────────────────────────────────────────┤
-│   DynamicsCompressor → ConvolutionReverb → StereoDelay → MasterGain    │
+│   DynamicsCompressor → ConvolutionReverb → StereoDelay → MasterGain     │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
