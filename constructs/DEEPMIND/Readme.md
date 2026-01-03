@@ -1,1 +1,2 @@
-
+""Machine intelligence is the last invention that humanity will ever need to make,""
+-- Nick Bostrom 
