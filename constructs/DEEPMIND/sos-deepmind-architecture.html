@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOS × DeepMind Integration Architecture</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #0f0f1a 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 40px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf, #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 40px;
+            font-size: 1.1rem;
+        }
+        .architecture {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .layer {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .connector {
+            display: flex;
+            justify-content: center;
+            margin: 10px 0;
+        }
+        .arrow {
+            font-size: 2rem;
+            color: #00d4ff;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        .box {
+            padding: 20px 30px;
+            border-radius: 12px;
+            text-align: center;
+            min-width: 180px;
+            position: relative;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        .box:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 40px rgba(0,212,255,0.3);
+        }
+        .box h3 {
+            font-size: 1rem;
+            margin-bottom: 8px;
+        }
+        .box p {
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+        .seismic {
+            background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
+            border: 2px solid #00d4ff;
+        }
+        .deepmind {
+            background: linear-gradient(135deg, #4a1a6b 0%, #7b2cbf 100%);
+            border: 2px solid #a855f7;
+        }
+        .synthesis {
+            background: linear-gradient(135deg, #1a4a3a 0%, #2d8a6a 100%);
+            border: 2px solid #10b981;
+        }
+        .output {
+            background: linear-gradient(135deg, #5a1a1a 0%, #8b2a2a 100%);
+            border: 2px solid #ff6b6b;
+        }
+        .control {
+            background: linear-gradient(135deg, #4a4a1a 0%, #8a8a2d 100%);
+            border: 2px solid #fbbf24;
+        }
+        .model-list {
+            max-width: 1000px;
+            margin: 60px auto 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        .model-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .model-card h4 {
+            color: #00d4ff;
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+        .model-card .tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+        .tag-open { background: #10b981; color: #fff; }
+        .tag-api { background: #a855f7; color: #fff; }
+        .tag-core { background: #ff6b6b; color: #fff; }
+        .model-card ul {
+            margin-top: 10px;
+            padding-left: 20px;
+            font-size: 0.85rem;
+        }
+        .model-card li {
+            margin: 5px 0;
+            color: #ccc;
+        }
+        .feedback-loop {
+            border: 2px dashed #00d4ff;
+            border-radius: 20px;
+            padding: 30px;
+            margin: 30px 0;
+            position: relative;
+        }
+        .feedback-label {
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #0a0a0f;
+            padding: 0 15px;
+            color: #00d4ff;
+            font-size: 0.9rem;
+        }
+        .horizontal-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .horizontal-flow .arrow {
+            font-size: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>SOS × DeepMind Live Music Models</h1>
+    <p class="subtitle">Seismic Waveform Sonification Enhanced by Real-Time AI Generation</p>
+
+    <div class="architecture">
+        <!-- Input Layer -->
+        <div class="layer">
+            <div class="box seismic">
+                <h3>🌍 Seismic Data</h3>
+                <p>USGS / EarthScope<br>Real-time waveforms</p>
+            </div>
+            <div class="box control">
+                <h3>🎛️ User Controls</h3>
+                <p>Scale, Root, Stretch<br>Texture/Tone/Rhythm</p>
+            </div>
+        </div>
+
+        <div class="connector"><span class="arrow">▼</span></div>
+
+        <!-- Processing Layer -->
+        <div class="feedback-loop">
+            <span class="feedback-label">🔄 Audio Injection Feedback Loop</span>
+            
+            <div class="horizontal-flow">
+                <div class="box synthesis">
+                    <h3>🔊 Granular Synthesis</h3>
+                    <p>Current SOS Engine<br>Three-layer grains</p>
+                </div>
+                <span class="arrow">→</span>
+                <div class="box deepmind">
+                    <h3>🎵 MusicCoCa</h3>
+                    <p>Audio-Text Embedding<br>768d style vectors</p>
+                </div>
+                <span class="arrow">→</span>
+                <div class="box deepmind">
+                    <h3>🤖 Magenta RT LM</h3>
+                    <p>750M Transformer<br>2s chunk generation</p>
+                </div>
+            </div>
+
+            <div class="connector"><span class="arrow">▼</span></div>
+
+            <div class="horizontal-flow">
+                <div class="box deepmind">
+                    <h3>📊 SpectroStream</h3>
+                    <p>Audio Codec<br>RVQ tokenization</p>
+                </div>
+                <span class="arrow">→</span>
+                <div class="box synthesis">
+                    <h3>🎚️ Mix & Blend</h3>
+                    <p>Seismic + AI output<br>CFG weighting</p>
+                </div>
+                <span class="arrow">↩️</span>
+            </div>
+        </div>
+
+        <div class="connector"><span class="arrow">▼</span></div>
+
+        <!-- Output Layer -->
+        <div class="layer">
+            <div class="box output">
+                <h3>🎧 Audio Output</h3>
+                <p>48kHz Stereo<br>Real-time streaming</p>
+            </div>
+            <div class="box seismic">
+                <h3>📡 Shadow Zone Viz</h3>
+                <p>P-wave ray tracing<br>Globe animation</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Model Reference Cards -->
+    <div class="model-list">
+        <div class="model-card">
+            <h4>1. Magenta RealTime</h4>
+            <span class="tag tag-open">Open Weights</span>
+            <span class="tag tag-core">Core</span>
+            <ul>
+                <li>750M parameter transformer</li>
+                <li>RTF 1.6× on free Colab TPU</li>
+                <li>10s context → 2s generation</li>
+                <li>Seismic as audio prompt</li>
+            </ul>
+        </div>
+
+        <div class="model-card">
+            <h4>2. MusicCoCa</h4>
+            <span class="tag tag-open">Open Weights</span>
+            <span class="tag tag-core">Core</span>
+            <ul>
+                <li>Joint audio-text embeddings</li>
+                <li>768d shared latent space</li>
+                <li>Embedding arithmetic for blending</li>
+                <li>Seismic → style vector bridge</li>
+            </ul>
+        </div>
+
+        <div class="model-card">
+            <h4>3. Audio Injection</h4>
+            <span class="tag tag-open">Open Weights</span>
+            <ul>
+                <li>Mix user audio with output</li>
+                <li>CFG for injection strength</li>
+                <li>Seismic grains → context</li>
+                <li>Live feedback loop</li>
+            </ul>
+        </div>
+
+        <div class="model-card">
+            <h4>4. SpectroStream</h4>
+            <span class="tag tag-open">Open Weights</span>
+            <ul>
+                <li>Neural audio codec</li>
+                <li>64-level RVQ depth</li>
+                <li>48kHz stereo fidelity</li>
+                <li>25Hz token frame rate</li>
+            </ul>
+        </div>
+
+        <div class="model-card">
+            <h4>5. Lyria RealTime</h4>
+            <span class="tag tag-api">API</span>
+            <ul>
+                <li>Advanced controls: BPM, key, stems</li>
+                <li>Self-conditioning priors</li>
+                <li>Cloud-based, lower latency</li>
+                <li>Map seismic → musical params</li>
+            </ul>
+        </div>
+
+        <div class="model-card">
+            <h4>6. Chunk Autoregression</h4>
+            <span class="tag tag-core">Architecture</span>
+            <ul>
+                <li>Markov assumption: 5 chunks</li>
+                <li>Stateless inference</li>
+                <li>Error isolation per chunk</li>
+                <li>Dynamic style per 2 seconds</li>
+            </ul>
+        </div>
+
+        <div class="model-card">
+            <h4>7. Latent Constraints</h4>
+            <span class="tag tag-api">API</span>
+            <ul>
+                <li>GAN-based embedding refinement</li>
+                <li>Text → audio distribution shift</li>
+                <li>Train for seismic embeddings</li>
+                <li>Preserve character via cosine reg</li>
+            </ul>
+        </div>
+    </div>
+
+    <div style="text-align: center; margin-top: 60px; color: #666; font-size: 0.9rem;">
+        <p>SOS × DeepMind Integration Analysis</p>
+        <p style="margin-top: 5px;">sos.allshookup.org | Live Music Models (arXiv:2508.04651)</p>
+    </div>
+</body>
+</html>
