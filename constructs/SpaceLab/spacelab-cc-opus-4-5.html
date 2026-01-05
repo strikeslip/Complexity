@@ -1,0 +1,948 @@
+<!--
+[SOS - Sounds Of Seismic]
+https://sos.allshookup.org/
+Copyright (c) [02025] [SHOOK aka D.V.R.]
+
+SOS is free software: you can redistribute it and/or modify
+it under the terms of the MIT License (https://opensource.org/license/mit)
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SPACELAB</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>
+ body {
+    font-family: 'Inter', sans-serif;
+    background: #101015;
+    color: #e0e0e0;
+    text-align: center;
+    padding: 40px 20px;
+    line-height: 1.6;
+}
+h1 {
+    font-size: 2.2em;
+    margin-bottom: 15px;
+    color: #ff6f00;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+button {
+    background: #ff6f00;
+    border: none;
+    color: #101015;
+    font-size: 18px;
+    font-weight: 600;
+    padding: 12px 28px;
+    border-radius: 8px;
+    cursor: pointer;
+    margin: 10px 10px;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+}
+button:hover {
+    background: #ff8f33;
+}
+button:active {
+    transform: scale(0.98);
+}
+button:disabled {
+    background: #555;
+    color: #888;
+    cursor: not-allowed;
+}
+.info {
+    margin-top: 30px;
+    font-size: 0.95em;
+    color: #ccc;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+}
+.info strong {
+    color: #ffaa00;
+}
+.info a {
+    color: #66aaff;
+    text-decoration: none;
+}
+.info a:hover {
+    text-decoration: underline;
+}
+.status-line {
+    display: block;
+    margin-bottom: 3px;
+}
+</style>
+</head>
+<body>
+<h1>SPACELAB</h1>
+<div>
+  <button id="startButton">Start</button>
+  <button id="stopButton" disabled>Stop</button>
+</div>
+<div id="eventInfo" class="info">Waiting for seismic data…</div>
+
+<script>
+/*══════════════════════════════════════════════════════════════════════════════
+  SPACELAB - Kraftwerk-inspired Seismic Sonification
+  Seismic waveforms modulate synthesis parameters
+══════════════════════════════════════════════════════════════════════════════*/
+
+/*──────────────── helpers ────────────────*/
+const ramp = (param, val, at, ms = 4) => {
+  param.cancelScheduledValues(at);
+  param.linearRampToValueAtTime(val, at + ms / 1000);
+};
+
+/*──────────────── globals ────────────────*/
+let audioCtx = null;
+let busIn, dc, limiter, duck;
+let intervalIDs = [];
+let loopTimer = null;
+let waveformBuffer = null;
+let seismicSamples = null;
+let seismicIndex = 0;
+
+// Spacelab globals
+let tempo = 118;
+let activeNodes = [];
+const scale = [0, 2, 3, 5, 7, 8, 10]; // D Dorian
+const rootNote = 62; // D4
+
+/*──────────────── data fetch & convert ────────────────*/
+async function fetchLatestEvent() {
+  const end = new Date().toISOString();
+  const start = new Date(Date.now() - 30 * 864e5).toISOString();
+  const url =
+    `https://earthquake.usgs.gov/fdsnws/event/1/query?` +
+    `format=geojson&starttime=${start}&endtime=${end}&minmagnitude=6.0&orderby=time`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`USGS Event Fetch failed: ${response.status}`);
+  const data = await response.json();
+  if (!data.features || data.features.length === 0) {
+      throw new Error('No recent M6+ events found.');
+  }
+  return data.features[0];
+}
+
+async function fetchMiniSEED(t) {
+  const duration = 60;
+  const end = new Date(new Date(t).getTime() + duration * 1000).toISOString();
+  const url =
+    `https://service.earthscope.org/fdsnws/dataselect/1/query?` +
+    `net=IU&sta=ANMO&loc=00&cha=BHZ&starttime=${t}&endtime=${end}&format=miniseed`;
+  return await (await fetch(url)).arrayBuffer();
+}
+
+const normalize = arr => {
+  const max = Math.max(...arr.map(Math.abs)) || 1;
+  return arr.map(x => x / max);
+};
+
+function parseMiniSEED(buf) {
+  const dv = new DataView(buf);
+  const numSamples = dv.getInt16(46, false);
+  const dataOffset = 64;
+  if (numSamples > 0 && buf.byteLength >= dataOffset + numSamples * 4) {
+      return normalize([...new Int32Array(buf.slice(dataOffset, dataOffset + numSamples * 4))]);
+  }
+  const n = dv.getInt32(24, true);
+  if (n > 0 && buf.byteLength >= 48 + n * 4) {
+      return normalize([...new Int32Array(buf.slice(48, 48 + n * 4))]);
+  }
+  throw new Error("Could not parse MiniSEED sample count.");
+}
+
+function resample(input, newLen) {
+  const out = new Float32Array(newLen);
+  const factor = (input.length - 1) / (newLen - 1);
+  for (let i = 0; i < newLen; i++) {
+    const idx = i * factor;
+    const i0 = idx | 0;
+    const frac = idx - i0;
+    const i1 = Math.min(i0 + 1, input.length - 1);
+    out[i] = (1 - frac) * input[i0] + frac * input[i1];
+  }
+  return out;
+}
+
+function buildWaveform(samples) {
+  const sr = 44100;
+  const fadeLen = Math.floor(0.2 * sr);
+  const stretched = resample(samples, 8 * sr);
+  for (let i = 0; i < fadeLen; i++) {
+    const win = (1 - Math.cos((Math.PI * i) / fadeLen)) * 0.5;
+    stretched[i] *= win;
+    stretched[stretched.length - 1 - i] *= win;
+  }
+  const buf = audioCtx.createBuffer(1, stretched.length, sr);
+  buf.copyToChannel(stretched, 0);
+  return buf;
+}
+
+/*──────────────── Seismic modulation helpers ────────────────*/
+function getSeismicValue() {
+  if (!seismicSamples || seismicSamples.length === 0) return 0;
+  seismicIndex = (seismicIndex + 1) % seismicSamples.length;
+  return seismicSamples[seismicIndex];
+}
+
+function getSeismicAvg(windowSize = 10) {
+  if (!seismicSamples || seismicSamples.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < windowSize; i++) {
+    const idx = (seismicIndex + i) % seismicSamples.length;
+    sum += Math.abs(seismicSamples[idx]);
+  }
+  return sum / windowSize;
+}
+
+/*──────────────── Spacelab Synthesis Engine ────────────────*/
+function midiToFreq(midi) {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+function degreeToMidi(degree, octave = 4) {
+  const idx = ((degree % scale.length) + scale.length) % scale.length;
+  const octaveOffset = Math.floor(degree / scale.length);
+  return rootNote + scale[idx] + (octave - 4) * 12 + octaveOffset * 12;
+}
+
+function beatToTime(beat) {
+  return beat * (60 / tempo);
+}
+
+// Bass Drum - seismic modulates pitch drop
+function playBD(time, volume = 0.7) {
+  const seisVal = Math.abs(getSeismicValue());
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  
+  osc.type = 'sine';
+  const startFreq = 80 + seisVal * 40;
+  osc.frequency.setValueAtTime(startFreq, time);
+  osc.frequency.exponentialRampToValueAtTime(35 + seisVal * 10, time + 0.08);
+  
+  gain.gain.setValueAtTime(volume, time);
+  gain.gain.exponentialRampToValueAtTime(0.001, time + 0.2);
+  
+  osc.connect(gain).connect(busIn);
+  osc.start(time);
+  osc.stop(time + 0.2);
+  activeNodes.push(osc);
+}
+
+// Snare - seismic modulates noise filter
+function playSD(time, volume = 0.4) {
+  const seisVal = Math.abs(getSeismicValue());
+  const bufferSize = audioCtx.sampleRate * 0.12;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = buffer;
+  
+  const osc = audioCtx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.value = 180 + seisVal * 60;
+  
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 6000 + seisVal * 4000;
+  
+  const noiseGain = audioCtx.createGain();
+  const oscGain = audioCtx.createGain();
+  
+  noiseGain.gain.setValueAtTime(volume * 0.7, time);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, time + 0.1);
+  
+  oscGain.gain.setValueAtTime(volume * 0.4, time);
+  oscGain.gain.exponentialRampToValueAtTime(0.001, time + 0.06);
+  
+  noise.connect(noiseGain).connect(filter).connect(busIn);
+  osc.connect(oscGain).connect(filter);
+  
+  noise.start(time);
+  noise.stop(time + 0.12);
+  osc.start(time);
+  osc.stop(time + 0.12);
+  activeNodes.push(noise, osc);
+}
+
+// Hi-Hat - seismic modulates decay
+function playHat(time, volume = 0.25) {
+  const seisVal = Math.abs(getSeismicValue());
+  const bufferSize = audioCtx.sampleRate * 0.08;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = Math.random() * 2 - 1;
+  }
+  
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = buffer;
+  
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'highpass';
+  filter.frequency.value = 7000 + seisVal * 2000;
+  
+  const gain = audioCtx.createGain();
+  const decayTime = 0.02 + seisVal * 0.04;
+  gain.gain.setValueAtTime(volume, time);
+  gain.gain.exponentialRampToValueAtTime(0.001, time + decayTime);
+  
+  noise.connect(filter).connect(gain).connect(busIn);
+  noise.start(time);
+  noise.stop(time + 0.08);
+  activeNodes.push(noise);
+}
+
+// Resonant Bass - seismic modulates filter resonance
+function playRes(time, freq, duration = 0.7, volume = 0.35) {
+  const seisVal = Math.abs(getSeismicValue());
+  const saw = audioCtx.createOscillator();
+  const pulse = audioCtx.createOscillator();
+  
+  saw.type = 'sawtooth';
+  saw.frequency.value = freq;
+  
+  pulse.type = 'square';
+  pulse.frequency.value = freq / 2;
+  
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.Q.value = 8 + seisVal * 10;
+  const filterBase = 800 + seisVal * 1200;
+  filter.frequency.setValueAtTime(filterBase, time);
+  filter.frequency.linearRampToValueAtTime(filterBase + 600, time + duration * 0.3);
+  filter.frequency.linearRampToValueAtTime(filterBase - 200, time + duration);
+  
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0, time);
+  gain.gain.linearRampToValueAtTime(volume, time + 0.015);
+  gain.gain.setValueAtTime(volume, time + duration * 0.8);
+  gain.gain.exponentialRampToValueAtTime(0.001, time + duration);
+  
+  const mixer = audioCtx.createGain();
+  mixer.gain.value = 0.5;
+  
+  saw.connect(mixer);
+  pulse.connect(mixer);
+  mixer.connect(filter).connect(gain).connect(busIn);
+  
+  saw.start(time);
+  saw.stop(time + duration);
+  pulse.start(time);
+  pulse.stop(time + duration);
+  activeNodes.push(saw, pulse);
+}
+
+// Poly Pad - seismic modulates detune and filter
+function playPoly(time, freq, duration = 2, volume = 0.2) {
+  const seisVal = Math.abs(getSeismicValue());
+  const osc1a = audioCtx.createOscillator();
+  const osc1b = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  
+  osc1a.type = 'square';
+  osc1b.type = 'square';
+  osc2.type = 'square';
+  
+  const detune = 1.005 + seisVal * 0.008;
+  osc1a.frequency.value = freq;
+  osc1b.frequency.value = freq * detune;
+  osc2.frequency.value = freq / 2;
+  
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.Q.value = 2 + seisVal * 3;
+  filter.frequency.setValueAtTime(200 + seisVal * 400, time);
+  filter.frequency.linearRampToValueAtTime(3000 + seisVal * 2000, time + Math.min(duration, 6));
+  
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0, time);
+  gain.gain.linearRampToValueAtTime(volume, time + 0.25);
+  gain.gain.setValueAtTime(volume, time + duration - 0.15);
+  gain.gain.linearRampToValueAtTime(0, time + duration);
+  
+  const mixer = audioCtx.createGain();
+  mixer.gain.value = 0.3;
+  
+  osc1a.connect(mixer);
+  osc1b.connect(mixer);
+  osc2.connect(mixer);
+  mixer.connect(filter).connect(gain).connect(busIn);
+  
+  osc1a.start(time);
+  osc1a.stop(time + duration);
+  osc1b.start(time);
+  osc1b.stop(time + duration);
+  osc2.start(time);
+  osc2.stop(time + duration);
+  activeNodes.push(osc1a, osc1b, osc2);
+}
+
+// Solo Lead - seismic modulates brightness
+function playSolo(time, freq, duration = 1, volume = 0.3) {
+  const seisVal = Math.abs(getSeismicValue());
+  const osc1 = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  
+  osc1.type = 'sawtooth';
+  osc2.type = 'sawtooth';
+  
+  osc1.frequency.value = freq;
+  osc2.frequency.value = freq * 1.004;
+  
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  const filterBase = 500 + seisVal * 600;
+  filter.frequency.setValueAtTime(filterBase, time);
+  filter.frequency.linearRampToValueAtTime(filterBase + 800 + seisVal * 400, time + 0.35);
+  filter.frequency.linearRampToValueAtTime(filterBase + 200, time + duration);
+  
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0, time);
+  gain.gain.linearRampToValueAtTime(volume, time + 0.15);
+  gain.gain.setValueAtTime(volume, time + duration - 0.25);
+  gain.gain.linearRampToValueAtTime(0, time + duration);
+  
+  const mixer = audioCtx.createGain();
+  mixer.gain.value = 0.5;
+  
+  osc1.connect(mixer);
+  osc2.connect(mixer);
+  mixer.connect(filter).connect(gain).connect(busIn);
+  
+  osc1.start(time);
+  osc1.stop(time + duration);
+  osc2.start(time);
+  osc2.stop(time + duration);
+  activeNodes.push(osc1, osc2);
+}
+
+// String Pad - seismic modulates shimmer
+function playString(time, freq, duration = 4, volume = 0.18) {
+  const seisVal = Math.abs(getSeismicValue());
+  const oscs = [];
+  const detuneAmt = 0.003 + seisVal * 0.004;
+  const freqs = [
+    freq * (1 - detuneAmt + Math.random() * detuneAmt * 2),
+    freq,
+    freq * (1 + detuneAmt * 0.5 + Math.random() * detuneAmt)
+  ];
+  
+  const mixer = audioCtx.createGain();
+  mixer.gain.value = 0.33;
+  
+  freqs.forEach(f => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = f;
+    osc.connect(mixer);
+    oscs.push(osc);
+  });
+  
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 1200 + seisVal * 800;
+  
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0, time);
+  gain.gain.linearRampToValueAtTime(volume, time + 0.25);
+  gain.gain.setValueAtTime(volume, time + duration - 0.4);
+  gain.gain.linearRampToValueAtTime(0, time + duration);
+  
+  mixer.connect(filter).connect(gain).connect(busIn);
+  
+  oscs.forEach(osc => {
+    osc.start(time);
+    osc.stop(time + duration);
+    activeNodes.push(osc);
+  });
+}
+
+// Sub Bass
+function playBass(time, freq, duration = 1, volume = 0.45) {
+  const seisVal = Math.abs(getSeismicValue());
+  const osc1 = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  
+  osc1.type = 'sine';
+  osc1.frequency.value = freq;
+  
+  osc2.type = 'triangle';
+  osc2.frequency.value = freq;
+  
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 350 + seisVal * 200;
+  
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(volume, time);
+  gain.gain.setValueAtTime(volume, time + duration - 0.06);
+  gain.gain.linearRampToValueAtTime(0, time + duration);
+  
+  const mixer = audioCtx.createGain();
+  mixer.gain.value = 0.5;
+  
+  osc1.connect(mixer);
+  osc2.connect(mixer);
+  mixer.connect(filter).connect(gain).connect(busIn);
+  
+  osc1.start(time);
+  osc1.stop(time + duration);
+  osc2.start(time);
+  osc2.stop(time + duration);
+  activeNodes.push(osc1, osc2);
+}
+
+/*──────────────── Pattern Definitions ────────────────*/
+function getDrumPattern() {
+  const pattern = [];
+  for (let bar = 0; bar < 4; bar++) {
+    const offset = bar * 16;
+    [0, 4, 8, 12].forEach(b => pattern.push({ beat: offset + b, type: 'bd' }));
+    [4, 12].forEach(b => pattern.push({ beat: offset + b, type: 'sd' }));
+    for (let i = 0; i < 16; i++) {
+      pattern.push({ beat: offset + i, type: 'hat' });
+    }
+  }
+  return pattern;
+}
+
+function getResPattern(type = 'chorus') {
+  const patterns = {
+    chorus: [
+      { beat: 0, degree: 0, duration: 3.5 },
+      { beat: 4, degree: 0, duration: 3.5 },
+      { beat: 8, degree: -2, duration: 3.5 },
+      { beat: 12, degree: 0, duration: 3.5 },
+    ],
+    verse: [
+      { beat: 0, degree: 0, duration: 7 },
+      { beat: 8, degree: -2, duration: 7 },
+    ],
+    intro: [
+      { beat: 0, degree: 0, duration: 7 },
+      { beat: 8, degree: 0, duration: 7 },
+    ]
+  };
+  return patterns[type] || patterns.chorus;
+}
+
+function getPolyPattern(type = 'chorus') {
+  const patterns = {
+    intro: [
+      { beat: 0, degrees: [0, 2, 4], duration: 16, octave: 4 },
+    ],
+    chorus: [
+      { beat: 0, degrees: [0, 2, 4], duration: 8, octave: 4 },
+      { beat: 8, degrees: [-2, 0, 2], duration: 8, octave: 4 },
+    ]
+  };
+  return patterns[type] || patterns.chorus;
+}
+
+function getSoloPattern(type = 'intro') {
+  const patterns = {
+    intro: [
+      { beat: 0, degree: 7, duration: 4, octave: 5 },
+      { beat: 4, degree: 5, duration: 2, octave: 5 },
+      { beat: 6, degree: 4, duration: 2, octave: 5 },
+      { beat: 8, degree: 2, duration: 4, octave: 5 },
+      { beat: 12, degree: 0, duration: 4, octave: 5 },
+    ],
+    chorus: [
+      { beat: 0, degree: 7, duration: 2, octave: 5 },
+      { beat: 2, degree: 9, duration: 2, octave: 5 },
+      { beat: 4, degree: 7, duration: 4, octave: 5 },
+      { beat: 8, degree: 5, duration: 2, octave: 5 },
+      { beat: 10, degree: 4, duration: 2, octave: 5 },
+      { beat: 12, degree: 2, duration: 4, octave: 5 },
+    ],
+    verse: [
+      { beat: 0, degree: 0, duration: 4, octave: 5 },
+      { beat: 4, degree: 2, duration: 2, octave: 5 },
+      { beat: 6, degree: 4, duration: 2, octave: 5 },
+      { beat: 8, degree: 5, duration: 4, octave: 5 },
+      { beat: 12, degree: 4, duration: 4, octave: 5 },
+    ],
+    vamp: [
+      { beat: 0, degree: 7, duration: 1, octave: 5 },
+      { beat: 1, degree: 9, duration: 1, octave: 5 },
+      { beat: 2, degree: 11, duration: 2, octave: 5 },
+      { beat: 4, degree: 9, duration: 2, octave: 5 },
+      { beat: 6, degree: 7, duration: 2, octave: 5 },
+      { beat: 8, degree: 5, duration: 2, octave: 5 },
+      { beat: 10, degree: 4, duration: 2, octave: 5 },
+      { beat: 12, degree: 2, duration: 4, octave: 5 },
+    ]
+  };
+  return patterns[type] || patterns.intro;
+}
+
+function getStringPattern() {
+  return [
+    { beat: 0, degrees: [0, 4, 7], duration: 8, octave: 4 },
+    { beat: 8, degrees: [-3, 0, 4], duration: 8, octave: 4 },
+  ];
+}
+
+function getBassPattern() {
+  return [
+    { beat: 0, degree: 0, duration: 7.5, octave: 3 },
+    { beat: 7.5, degree: 0, duration: 0.5, octave: 3 },
+    { beat: 8, degree: 3, duration: 3.5, octave: 3 },
+    { beat: 11.5, degree: 6, duration: 0.5, octave: 3 },
+    { beat: 12, degree: 7, duration: 4, octave: 3 },
+  ];
+}
+
+/*──────────────── Section Scheduling ────────────────*/
+let currentSectionIndex = 0;
+let sectionTimer = null;
+
+const songStructure = [
+  { section: 'intro1', beats: 32 },
+  { section: 'intro2', beats: 32 },
+  { section: 'intro3', beats: 32 },
+  { section: 'chorus', beats: 64 },
+  { section: 'verse', beats: 64 },
+  { section: 'chorus', beats: 64 },
+  { section: 'break', beats: 32 },
+  { section: 'verse', beats: 64 },
+  { section: 'chorus', beats: 64 },
+  { section: 'vamp', beats: 64 },
+  { section: 'vamp', beats: 64 },
+];
+
+function scheduleSection(sectionName, startTime) {
+  const t0 = startTime;
+  
+  switch(sectionName) {
+    case 'intro1':
+      getPolyPattern('intro').forEach(e => {
+        e.degrees.forEach(d => {
+          const freq = midiToFreq(degreeToMidi(d, e.octave));
+          playPoly(t0 + beatToTime(e.beat), freq, beatToTime(e.duration));
+        });
+      });
+      getSoloPattern('intro').forEach(e => {
+        const freq = midiToFreq(degreeToMidi(e.degree, e.octave));
+        playSolo(t0 + beatToTime(e.beat), freq, beatToTime(e.duration));
+      });
+      break;
+
+    case 'intro2':
+      for (let i = 0; i < 32; i += 2) {
+        playHat(t0 + beatToTime(i));
+      }
+      getResPattern('intro').forEach(e => {
+        const freq = midiToFreq(degreeToMidi(e.degree, 3));
+        playRes(t0 + beatToTime(e.beat), freq, beatToTime(e.duration));
+        playRes(t0 + beatToTime(e.beat + 16), freq, beatToTime(e.duration));
+      });
+      break;
+
+    case 'intro3':
+      for (let bar = 0; bar < 2; bar++) {
+        const offset = bar * 16;
+        [0, 8].forEach(b => playBD(t0 + beatToTime(offset + b)));
+        [8].forEach(b => playSD(t0 + beatToTime(offset + b)));
+        for (let i = 0; i < 16; i += 2) {
+          playHat(t0 + beatToTime(offset + i));
+        }
+      }
+      getResPattern('intro').forEach(e => {
+        const freq = midiToFreq(degreeToMidi(e.degree, 3));
+        playRes(t0 + beatToTime(e.beat), freq, beatToTime(e.duration));
+        playRes(t0 + beatToTime(e.beat + 16), freq, beatToTime(e.duration));
+      });
+      getStringPattern().forEach(e => {
+        e.degrees.forEach(d => {
+          const freq = midiToFreq(degreeToMidi(d, e.octave));
+          playString(t0 + beatToTime(e.beat), freq, beatToTime(e.duration));
+          playString(t0 + beatToTime(e.beat + 16), freq, beatToTime(e.duration));
+        });
+      });
+      break;
+
+    case 'chorus':
+      getDrumPattern().forEach(e => {
+        const et = t0 + beatToTime(e.beat);
+        if (e.type === 'bd') playBD(et);
+        if (e.type === 'sd') playSD(et);
+        if (e.type === 'hat') playHat(et);
+      });
+      for (let rep = 0; rep < 4; rep++) {
+        const offset = rep * 16;
+        getResPattern('chorus').forEach(e => {
+          const freq = midiToFreq(degreeToMidi(e.degree, 3));
+          playRes(t0 + beatToTime(e.beat + offset), freq, beatToTime(e.duration));
+        });
+        getSoloPattern('chorus').forEach(e => {
+          const freq = midiToFreq(degreeToMidi(e.degree, e.octave));
+          playSolo(t0 + beatToTime(e.beat + offset), freq, beatToTime(e.duration));
+        });
+      }
+      getPolyPattern('chorus').forEach(e => {
+        e.degrees.forEach(d => {
+          const freq = midiToFreq(degreeToMidi(d, e.octave));
+          playPoly(t0 + beatToTime(e.beat), freq, beatToTime(e.duration * 4));
+        });
+      });
+      for (let rep = 0; rep < 4; rep++) {
+        getStringPattern().forEach(e => {
+          e.degrees.forEach(d => {
+            const freq = midiToFreq(degreeToMidi(d, e.octave));
+            playString(t0 + beatToTime(e.beat + rep * 16), freq, beatToTime(e.duration));
+          });
+        });
+      }
+      break;
+
+    case 'verse':
+      getDrumPattern().forEach(e => {
+        const et = t0 + beatToTime(e.beat);
+        if (e.type === 'bd') playBD(et);
+        if (e.type === 'sd') playSD(et);
+        if (e.type === 'hat') playHat(et);
+      });
+      for (let rep = 0; rep < 4; rep++) {
+        const offset = rep * 16;
+        getResPattern('verse').forEach(e => {
+          const freq = midiToFreq(degreeToMidi(e.degree, 3));
+          playRes(t0 + beatToTime(e.beat + offset), freq, beatToTime(e.duration));
+        });
+        getSoloPattern('verse').forEach(e => {
+          const freq = midiToFreq(degreeToMidi(e.degree, e.octave));
+          playSolo(t0 + beatToTime(e.beat + offset), freq, beatToTime(e.duration));
+        });
+        getBassPattern().forEach(e => {
+          const freq = midiToFreq(degreeToMidi(e.degree, e.octave));
+          playBass(t0 + beatToTime(e.beat + offset), freq, beatToTime(e.duration));
+        });
+      }
+      for (let rep = 0; rep < 4; rep++) {
+        getStringPattern().forEach(e => {
+          e.degrees.forEach(d => {
+            const freq = midiToFreq(degreeToMidi(d, e.octave));
+            playString(t0 + beatToTime(e.beat + rep * 16), freq, beatToTime(e.duration));
+          });
+        });
+      }
+      break;
+
+    case 'break':
+      for (let rep = 0; rep < 2; rep++) {
+        getStringPattern().forEach(e => {
+          e.degrees.forEach(d => {
+            const freq = midiToFreq(degreeToMidi(d, e.octave));
+            playString(t0 + beatToTime(e.beat + rep * 16), freq, beatToTime(e.duration));
+          });
+        });
+        getBassPattern().forEach(e => {
+          const freq = midiToFreq(degreeToMidi(e.degree, e.octave));
+          playBass(t0 + beatToTime(e.beat + rep * 16), freq, beatToTime(e.duration));
+        });
+      }
+      break;
+
+    case 'vamp':
+      getDrumPattern().forEach(e => {
+        const et = t0 + beatToTime(e.beat);
+        if (e.type === 'bd') playBD(et);
+        if (e.type === 'sd') playSD(et);
+        if (e.type === 'hat') playHat(et);
+      });
+      for (let rep = 0; rep < 4; rep++) {
+        const offset = rep * 16;
+        getResPattern('verse').forEach(e => {
+          const freq = midiToFreq(degreeToMidi(e.degree, 3));
+          playRes(t0 + beatToTime(e.beat + offset), freq, beatToTime(e.duration));
+        });
+        getSoloPattern('vamp').forEach(e => {
+          const freq = midiToFreq(degreeToMidi(e.degree, e.octave));
+          playSolo(t0 + beatToTime(e.beat + offset), freq, beatToTime(e.duration));
+        });
+        getBassPattern().forEach(e => {
+          const freq = midiToFreq(degreeToMidi(e.degree, e.octave));
+          playBass(t0 + beatToTime(e.beat + offset), freq, beatToTime(e.duration));
+        });
+      }
+      for (let rep = 0; rep < 4; rep++) {
+        getStringPattern().forEach(e => {
+          e.degrees.forEach(d => {
+            const freq = midiToFreq(degreeToMidi(d, e.octave + 1));
+            playString(t0 + beatToTime(e.beat + rep * 16), freq, beatToTime(e.duration), 0.14);
+          });
+        });
+      }
+      break;
+  }
+}
+
+function playSongLoop() {
+  if (currentSectionIndex >= songStructure.length) {
+    currentSectionIndex = 0; // Loop the song
+  }
+  
+  const { section, beats } = songStructure[currentSectionIndex];
+  const sectionDuration = beatToTime(beats) * 1000;
+  
+  // Update display
+  const firstLine = infoDiv.querySelector('.status-line:first-child');
+  if (firstLine) {
+    const existingText = firstLine.innerHTML;
+    const parts = existingText.split('|');
+    if (parts.length > 1) {
+      firstLine.innerHTML = `Section: <strong>${section.toUpperCase()}</strong> |${parts.slice(1).join('|')}`;
+    }
+  }
+  
+  scheduleSection(section, audioCtx.currentTime);
+  currentSectionIndex++;
+  
+  sectionTimer = setTimeout(playSongLoop, sectionDuration);
+}
+
+/*──────────────── Quake playback (into busIn) ────────────────*/
+function playWaveform() {
+  if (!waveformBuffer) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = waveformBuffer;
+
+  const bp = audioCtx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 600;
+  bp.Q.value = 1;
+
+  src.connect(bp).connect(busIn);
+
+  const t = audioCtx.currentTime;
+  duck.gain.cancelScheduledValues(t);
+  duck.gain.setTargetAtTime(0.7, t, 0.02);
+  duck.gain.setTargetAtTime(1, t + 0.8, 0.25);
+
+  src.start();
+  src.stop(t + 8);
+}
+
+/*──────────────── UI & main control ────────────────*/
+const startBtn = document.getElementById('startButton');
+const stopBtn = document.getElementById('stopButton');
+const infoDiv = document.getElementById('eventInfo');
+
+async function startSonification() {
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await audioCtx.resume();
+
+    /* Main bus: sources → busIn → dc → limiter → duck → destination */
+    busIn = audioCtx.createGain();
+    busIn.gain.value = 0.8;
+
+    /* Keep‑alive constant so Chrome never suspends */
+    const keep = audioCtx.createConstantSource();
+    keep.offset.value = 1e-5;
+    keep.start();
+    keep.connect(busIn);
+
+    dc = audioCtx.createBiquadFilter();
+    dc.type = 'highpass';
+    dc.frequency.value = 20;
+
+    limiter = audioCtx.createDynamicsCompressor();
+    limiter.threshold.value = -8;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 6;
+
+    duck = audioCtx.createGain();
+    duck.gain.value = 1;
+
+    busIn.connect(dc).connect(limiter).connect(duck).connect(audioCtx.destination);
+
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    infoDiv.textContent = 'Fetching latest earthquake data...';
+
+    /* Fetch quake info */
+    const evt = await fetchLatestEvent();
+    const quakeInfo = {
+      place: evt.properties.place || "Unknown location",
+      mag: evt.properties.mag || 0,
+      depth: evt.geometry.coordinates[2] || 0,
+      time: new Date(evt.properties.time).toISOString(),
+      usgs: `https://earthquake.usgs.gov/earthquakes/eventpage/${evt.id}`
+    };
+    
+    // Adjust tempo based on magnitude
+    tempo = Math.round(110 + (quakeInfo.mag - 6) * 8);
+    
+    infoDiv.innerHTML = `
+        <span class="status-line">Section: <strong>LOADING</strong> | <strong>M${quakeInfo.mag.toFixed(1)}</strong> ${quakeInfo.place}</span>
+        <span class="status-line">Depth: <strong>${quakeInfo.depth.toFixed(1)} km</strong>, Time: ${new Date(quakeInfo.time).toLocaleString()}</span>
+        <span class="status-line"><a href="${quakeInfo.usgs}" target="_blank">View on USGS</a> | Station: IU.ANMO | Tempo: ${tempo} BPM</span>
+    `;
+
+    /* Build quake buffer and samples for modulation */
+    const seed = await fetchMiniSEED(quakeInfo.time);
+    seismicSamples = parseMiniSEED(seed);
+    waveformBuffer = buildWaveform(seismicSamples);
+
+    /* Start Spacelab sequencer */
+    currentSectionIndex = 0;
+    playSongLoop();
+
+    /* Play seismic waveform periodically */
+    playWaveform();
+    loopTimer = setInterval(() => {
+      playWaveform();
+    }, 8800);
+
+  } catch (error) {
+      console.error("Error during startup:", error);
+      infoDiv.textContent = `Error: ${error.message}`;
+      stopSonification();
+  }
+}
+
+function stopSonification() {
+  clearTimeout(sectionTimer);
+  clearInterval(loopTimer);
+  intervalIDs.forEach(clearTimeout);
+  intervalIDs = [];
+  
+  activeNodes.forEach(node => {
+    try { node.stop(); } catch(e) {}
+    try { node.disconnect(); } catch(e) {}
+  });
+  activeNodes = [];
+  
+  if (audioCtx) {
+      audioCtx.close().then(() => {
+          console.log("AudioContext closed.");
+      });
+      audioCtx = null;
+  }
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  infoDiv.textContent = 'Waiting for seismic data…';
+  waveformBuffer = null;
+  seismicSamples = null;
+  currentSectionIndex = 0;
+}
+
+startBtn.onclick = startSonification;
+stopBtn.onclick = stopSonification;
+</script>
+</body>
+</html>
